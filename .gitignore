@@ -1,0 +1,17 @@
+.venv/
+.venv-python39-backup/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+Thumbs.db
+data/uploads/*
+data/outputs/*
+data/jobs/*
+data/transcripts/*
+data/candidates/*
+!data/uploads/.gitkeep
+!data/outputs/.gitkeep
+!data/jobs/.gitkeep
+!data/transcripts/.gitkeep
+!data/candidates/.gitkeep

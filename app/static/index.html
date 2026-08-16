@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>横動画ショート変換</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; background: #f5f5f7; color: #111; }
+    .wrap { max-width: 920px; margin: 0 auto; padding: 48px 20px; }
+    .card { background: white; border-radius: 20px; padding: 28px; box-shadow: 0 8px 30px rgba(0,0,0,.08); }
+    h1 { margin-top: 0; font-size: 32px; }
+    .drop { display: flex; min-height: 180px; box-sizing: border-box; align-items: center; justify-content: center; flex-direction: column; gap: 8px; border: 2px dashed #aaa; border-radius: 16px; padding: 28px 20px; text-align: center; cursor: pointer; background: #fafafa; }
+    .drop.drag { border-color: #111; background: #f0f0f0; }
+    .drop:focus-visible { outline: 3px solid #2778e6; outline-offset: 3px; }
+    .drop small { color: #666; }
+    input[type="file"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+    button { margin-top: 16px; border: 0; border-radius: 12px; padding: 12px 18px; font-weight: 700; cursor: pointer; background: #111; color: white; }
+    button:disabled { cursor: wait; opacity: .55; }
+    .progress { height: 10px; margin-top: 12px; overflow: hidden; border-radius: 8px; background: #ddd; }
+    .progress > div { width: 0; height: 100%; background: #127a34; transition: width .3s; }
+    .time { color: #666; font-variant-numeric: tabular-nums; }
+    .candidates { margin-top: 28px; }
+    .candidate { margin: 14px 0; padding: 18px; border: 1px solid #ddd; border-radius: 14px; background: #fafafa; }
+    .candidate-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .candidate-check { width: 20px; height: 20px; accent-color: #111; }
+    .rank { font-weight: 800; font-size: 18px; }
+    .score { padding: 5px 9px; border-radius: 999px; background: #111; color: white; font-weight: 800; }
+    .candidate h3 { margin: 12px 0 8px; }
+    .candidate p { margin: 6px 0; line-height: 1.55; }
+    .candidate-preview { display: block; width: min(100%, 640px); max-height: 360px; margin: 14px 0 4px; border-radius: 10px; background: #000; }
+    .preview-play { margin: 8px 0 2px; padding: 9px 14px; background: #3d5875; }
+    .preview-help { color: #666; font-size: 13px; }
+    .engine { color: #666; font-size: 14px; }
+    .render-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+    .render-actions button { margin-top: 0; }
+    .subtitle-option { display: flex; align-items: center; gap: 8px; margin: 18px 0 12px; font-weight: 700; }
+    .subtitle-option input { width: 20px; height: 20px; accent-color: #111; }
+    .style-settings { margin-top: 18px; padding: 16px; border-radius: 12px; background: #f0f3f8; }
+    .style-row { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; }
+    .style-row label, .edit-label { font-weight: 700; }
+    .style-row select { margin-left: 6px; padding: 7px; border: 1px solid #aaa; border-radius: 8px; }
+    .edit-label { display: block; margin-top: 12px; font-size: 14px; }
+    .title-input, .subtitle-edit, .montage-title { width: 100%; box-sizing: border-box; margin-top: 5px; border: 1px solid #bbb; border-radius: 9px; padding: 9px 10px; font: inherit; }
+    .subtitle-editor { margin-top: 12px; padding: 10px; border-radius: 10px; background: white; }
+    .subtitle-editor summary { cursor: pointer; font-weight: 700; }
+    .subtitle-row { display: grid; grid-template-columns: 100px 1fr; gap: 8px; align-items: center; margin-top: 8px; }
+    .subtitle-row .time { font-size: 13px; }
+    .range-editor { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+    .range-editor label { font-size: 14px; font-weight: 700; }
+    .range-editor input, .range-editor select { width: 105px; margin-left: 5px; padding: 7px; border: 1px solid #bbb; border-radius: 8px; }
+    .secondary { background: #e6e6e6; color: #111; }
+    .outputs { margin-top: 28px; }
+    .output-card { margin: 16px 0; padding: 16px; border: 1px solid #ddd; border-radius: 14px; }
+    .output-card video { display: block; width: min(100%, 360px); max-height: 640px; margin-top: 12px; border-radius: 10px; background: #000; }
+    .download { display: inline-block; margin-top: 10px; color: #075fc9; font-weight: 700; }
+    .delete-output { margin: 10px 0 0 12px; padding: 9px 13px; background: #a32727; }
+    .post-metadata { margin-top: 16px; padding: 14px; border-radius: 10px; background: #f0f3f8; }
+    .post-metadata label { display: block; margin-top: 10px; font-size: 14px; font-weight: 700; }
+    .post-metadata input, .post-metadata textarea { width: 100%; box-sizing: border-box; margin-top: 5px; padding: 9px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
+    .copy-metadata { margin: 8px 8px 0 0; padding: 8px 12px; background: #3d5875; }
+    .notice { margin-bottom: 20px; padding: 16px; border: 1px solid #e5b200; border-radius: 12px; background: #fff8d8; color: #5f4800; }
+    .source-title { margin-top: 26px; font-size: 18px; }
+    .youtube-box { margin-top: 22px; padding: 20px; border-radius: 16px; background: #f0f3f8; }
+    .youtube-row { display: flex; gap: 10px; align-items: stretch; }
+    .youtube-row input { flex: 1; min-width: 0; box-sizing: border-box; border: 1px solid #aaa; border-radius: 12px; padding: 12px 14px; font-size: 16px; }
+    .youtube-row button { margin-top: 0; white-space: nowrap; }
+    @media (max-width: 600px) { .wrap { padding: 20px 12px; } .card { padding: 20px; } h1 { font-size: 25px; } .youtube-row { flex-direction: column; } }
+    pre { white-space: pre-wrap; word-break: break-word; background: #111; color: #eee; padding: 16px; border-radius: 12px; overflow: auto; }
+    .ok { color: #127a34; }
+    .ng { color: #a32727; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>横動画 → Shorts 自動変換</h1>
+    <p>動画を読み込み、ローカルWhisperでタイムコード付き文字起こしを作成します。</p>
+    <div class="notice" id="fileNotice" hidden>
+      <strong>このHTMLファイルは直接開けません。</strong><br />
+      Macでは <code>run_mac.command</code>、Windowsでは <code>run_windows.bat</code> を起動し、
+      <code>http://127.0.0.1:8765</code> を開いてください。
+    </div>
+    <p id="health">環境確認中…</p>
+
+    <h2 class="source-title">PCにある動画を使う</h2>
+    <div class="drop" id="drop" role="button" tabindex="0" aria-controls="file">
+      <strong>動画をここへドラッグ＆ドロップ</strong><br />
+      <small id="fileName">またはクリックして選択</small>
+    </div>
+    <input id="file" type="file" accept="video/mp4,video/quicktime,video/x-matroska,video/x-m4v,video/x-msvideo,video/webm,.mp4,.mov,.mkv,.m4v,.avi,.webm" />
+    <button id="uploadBtn" disabled>動画を読み込む</button>
+    <div class="youtube-box">
+      <h2 class="source-title">YouTubeの動画を使う</h2>
+      <div class="youtube-row">
+        <input id="youtubeUrl" type="url" placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube URL" />
+        <button id="youtubeBtn">YouTubeから読み込む</button>
+      </div>
+    </div>
+    <button id="transcribeBtn" hidden>文字起こしを開始</button>
+    <button id="analyzeBtn" hidden>ショート候補を解析</button>
+    <p id="status"></p>
+    <div class="progress" id="progress" hidden><div id="progressBar"></div></div>
+    <div class="candidates" id="candidateSection" hidden>
+      <h2>ショート候補</h2>
+      <p class="engine" id="engineLabel"></p>
+      <div id="candidateList"></div>
+      <div class="style-settings">
+        <label class="subtitle-option"><input id="subtitleCheck" type="checkbox" checked /> 大きい日本語字幕を入れる</label>
+        <div class="style-row">
+          <label>字幕サイズ <input id="subtitleSize" type="range" min="42" max="100" value="72" /> <span id="subtitleSizeValue">72</span></label>
+          <label>字幕位置
+            <select id="subtitlePosition">
+              <option value="upper">上</option><option value="middle">中央</option><option value="lower" selected>下</option>
+            </select>
+          </label>
+        </div>
+        <div class="style-row title-style-row">
+          <label>固定タイトルサイズ <input id="titleSize" type="range" min="28" max="200" value="52" /> <span id="titleSizeValue">52</span></label>
+          <label>固定タイトル位置 <input id="titleMarginTop" type="range" min="30" max="600" value="90" /> <span id="titleMarginTopValue">90</span></label>
+        </div>
+        <p class="engine">固定タイトル位置は、数値を大きくすると下へ移動します。</p>
+        <label class="edit-label">見どころ再編集の固定タイトル
+          <textarea id="montageTitle" class="montage-title" maxlength="84" rows="2">見どころまとめ</textarea>
+        </label>
+        <label class="edit-label">動画の最後に表示する締めテロップ（空欄で非表示）
+          <textarea id="endingText" class="montage-title" maxlength="120" rows="2">続きは本編で！</textarea>
+        </label>
+        <div class="style-row title-style-row">
+          <label>締めテロップサイズ <input id="endingSize" type="range" min="36" max="200" value="96" /> <span id="endingSizeValue">96</span></label>
+          <label>表示秒数 <input id="endingDuration" type="number" min="0.5" max="10" step="0.5" value="2.5" /></label>
+        </div>
+      </div>
+      <div class="render-actions">
+        <button id="individualBtn">選択候補をそれぞれ動画化</button>
+        <button id="montageBtn" class="secondary">見どころをつないで1本にする</button>
+      </div>
+      <p class="engine">再編集は2件以上を選択し、各候補から印象的な8〜15秒をつなぎます。</p>
+    </div>
+    <div class="outputs" id="outputSection" hidden>
+      <h2>完成動画</h2>
+      <div id="outputList"></div>
+    </div>
+    <pre id="result" hidden></pre>
+  </div>
+</div>
+<script>
+const fileInput = document.getElementById('file');
+const drop = document.getElementById('drop');
+const btn = document.getElementById('uploadBtn');
+const status = document.getElementById('status');
+const result = document.getElementById('result');
+const health = document.getElementById('health');
+const fileName = document.getElementById('fileName');
+const fileNotice = document.getElementById('fileNotice');
+const transcribeBtn = document.getElementById('transcribeBtn');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const youtubeUrl = document.getElementById('youtubeUrl');
+const youtubeBtn = document.getElementById('youtubeBtn');
+const progress = document.getElementById('progress');
+const progressBar = document.getElementById('progressBar');
+const candidateSection = document.getElementById('candidateSection');
+const candidateList = document.getElementById('candidateList');
+const engineLabel = document.getElementById('engineLabel');
+const individualBtn = document.getElementById('individualBtn');
+const montageBtn = document.getElementById('montageBtn');
+const outputSection = document.getElementById('outputSection');
+const outputList = document.getElementById('outputList');
+const subtitleCheck = document.getElementById('subtitleCheck');
+const subtitleSize = document.getElementById('subtitleSize');
+const subtitleSizeValue = document.getElementById('subtitleSizeValue');
+const subtitlePosition = document.getElementById('subtitlePosition');
+const montageTitle = document.getElementById('montageTitle');
+const titleSize = document.getElementById('titleSize');
+const titleSizeValue = document.getElementById('titleSizeValue');
+const titleMarginTop = document.getElementById('titleMarginTop');
+const titleMarginTopValue = document.getElementById('titleMarginTopValue');
+const endingText = document.getElementById('endingText');
+const endingSize = document.getElementById('endingSize');
+const endingSizeValue = document.getElementById('endingSizeValue');
+const endingDuration = document.getElementById('endingDuration');
+let currentJobId = null;
+let pollTimer = null;
+let selectedFile = null;
+let currentTranscript = null;
+
+const openedDirectly = window.location.protocol === 'file:';
+if (openedDirectly) {
+  fileNotice.hidden = false;
+  health.textContent = '⚠ サーバーが起動していないため操作できません。';
+  health.className = 'ng';
+  drop.setAttribute('aria-disabled', 'true');
+} else {
+  fetch('/api/health').then(r => r.json()).then(x => {
+    const good = x.ffmpeg && x.ffprobe;
+    health.className = good ? 'ok' : 'ng';
+    health.textContent = good
+      ? '✓ FFmpeg / ffprobe を確認しました'
+      : '⚠ FFmpeg または ffprobe が見つかりません。READMEの手順で導入してください。';
+  }).catch(() => {
+    health.textContent = '⚠ サーバーと通信できません。起動スクリプトを再実行してください。';
+    health.className = 'ng';
+  });
+}
+
+function selectFile(file) {
+  if (!file) return;
+  selectedFile = file;
+  fileName.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+  btn.disabled = false;
+}
+
+function formatTime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const value = `${String(minutes).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  return hours ? `${String(hours).padStart(2, '0')}:${value}` : value;
+}
+
+function showTranscript(data) {
+  currentTranscript = data;
+}
+
+function showCandidates(analysis) {
+  candidateList.replaceChildren();
+  engineLabel.textContent = analysis.engine === 'openai'
+    ? `OpenAI ${analysis.model} によるAI評価`
+    : 'ローカル評価（OpenAI APIキーを設定するとAI評価に切り替わります）';
+  analysis.candidates.forEach((item, index) => {
+    const card = document.createElement('article'); card.className = 'candidate';
+    const head = document.createElement('div'); head.className = 'candidate-head';
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'candidate-check';
+    checkbox.dataset.index = index; checkbox.checked = index < 4; checkbox.setAttribute('aria-label', `候補${index + 1}を選択`);
+    const rank = document.createElement('span'); rank.className = 'rank'; rank.textContent = `#${index + 1}`;
+    const time = document.createElement('span'); time.className = 'time';
+    time.textContent = `${formatTime(item.start)} - ${formatTime(item.end)} / ${Math.round(item.duration)}秒`;
+    const score = document.createElement('span'); score.className = 'score'; score.textContent = `${item.score}点`;
+    head.append(checkbox, rank, time, score);
+    const title = document.createElement('h3'); title.textContent = item.summary;
+    const reason = document.createElement('p'); reason.textContent = `選定理由: ${item.reason}`;
+    const hook = document.createElement('p'); hook.textContent = `推奨フック: 「${item.hook}」`;
+    const preview = document.createElement('video'); preview.className = 'candidate-preview';
+    preview.controls = true; preview.preload = 'metadata'; preview.playsInline = true;
+    preview.dataset.start = Number(item.start); preview.dataset.end = Number(item.end);
+    preview.src = `/api/jobs/${encodeURIComponent(currentJobId)}/source`;
+    const seekPreviewToStart = () => {
+      const start = Number(preview.dataset.start);
+      if (Number.isFinite(start) && preview.readyState >= HTMLMediaElement.HAVE_METADATA) preview.currentTime = start;
+    };
+    preview.addEventListener('loadedmetadata', seekPreviewToStart);
+    preview.addEventListener('play', () => {
+      const start = Number(preview.dataset.start); const end = Number(preview.dataset.end);
+      if (preview.currentTime < start - 0.25 || preview.currentTime >= end) preview.currentTime = start;
+    });
+    preview.addEventListener('timeupdate', () => {
+      const end = Number(preview.dataset.end);
+      if (Number.isFinite(end) && preview.currentTime >= end) { preview.pause(); preview.currentTime = Number(preview.dataset.start); }
+    });
+    const previewPlay = document.createElement('button'); previewPlay.type = 'button'; previewPlay.className = 'preview-play';
+    previewPlay.textContent = '候補の先頭から再生';
+    previewPlay.addEventListener('click', async () => {
+      seekPreviewToStart();
+      try { await preview.play(); } catch (_) { preview.controls = true; }
+    });
+    const previewHelp = document.createElement('p'); previewHelp.className = 'preview-help';
+    previewHelp.textContent = '元動画の候補範囲をプレビューします。開始・終了秒の変更も即時反映されます。';
+    const rangeEditor = document.createElement('div'); rangeEditor.className = 'range-editor';
+    const startLabel = document.createElement('label'); startLabel.textContent = '開始（秒）';
+    const startInput = document.createElement('input'); startInput.type = 'number'; startInput.step = '0.1'; startInput.min = '0';
+    startInput.className = 'candidate-start'; startInput.dataset.index = index; startInput.value = Number(item.start).toFixed(1);
+    const endLabel = document.createElement('label'); endLabel.textContent = '終了（秒）';
+    const endInput = document.createElement('input'); endInput.type = 'number'; endInput.step = '0.1'; endInput.min = '0';
+    endInput.max = currentTranscript && currentTranscript.duration ? currentTranscript.duration : '';
+    endInput.className = 'candidate-end'; endInput.dataset.index = index; endInput.value = Number(item.end).toFixed(1);
+    const syncPreviewRange = () => {
+      const start = Number(startInput.value); const end = Number(endInput.value);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+      preview.dataset.start = start; preview.dataset.end = end;
+      preview.pause(); seekPreviewToStart();
+    };
+    startInput.addEventListener('change', syncPreviewRange);
+    endInput.addEventListener('change', syncPreviewRange);
+    startLabel.append(startInput); endLabel.append(endInput); rangeEditor.append(startLabel, endLabel);
+    const framingLabel = document.createElement('label'); framingLabel.textContent = '画角';
+    const framing = document.createElement('select'); framing.className = 'candidate-framing'; framing.dataset.index = index;
+    [['left', '左を切り抜く'], ['center', '中央を切り抜く'], ['right', '右を切り抜く'], ['blur', '全体表示（ぼかし背景）']].forEach(([value, label]) => {
+      const option = document.createElement('option'); option.value = value; option.textContent = label;
+      option.selected = value === 'center'; framing.append(option);
+    });
+    framingLabel.append(framing); rangeEditor.append(framingLabel);
+    const titleLabel = document.createElement('label'); titleLabel.className = 'edit-label';
+    titleLabel.textContent = '完成動画の上部に常時表示する見出し';
+    const titleInput = document.createElement('textarea'); titleInput.className = 'title-input';
+    titleInput.dataset.index = index; titleInput.maxLength = 84; titleInput.rows = 2; titleInput.value = item.summary || '';
+    titleLabel.append(titleInput);
+    const editor = document.createElement('details'); editor.className = 'subtitle-editor';
+    const editorSummary = document.createElement('summary'); editorSummary.textContent = '字幕の文章を編集';
+    editor.append(editorSummary);
+    const editorHelp = document.createElement('p'); editorHelp.className = 'engine';
+    editorHelp.textContent = '文章を空にすると、その時間の映像と音声もカットして前後をつなぎます。';
+    editor.append(editorHelp);
+    ((currentTranscript && currentTranscript.segments) || []).forEach((segment, segmentIndex) => {
+      if (Number(segment.end) <= Number(item.start) || Number(segment.start) >= Number(item.end)) return;
+      const row = document.createElement('label'); row.className = 'subtitle-row';
+      const segmentTime = document.createElement('span'); segmentTime.className = 'time';
+      segmentTime.textContent = `${formatTime(segment.start)} - ${formatTime(segment.end)}`;
+      const input = document.createElement('textarea'); input.className = 'subtitle-edit'; input.rows = 2;
+      input.dataset.segmentIndex = segmentIndex; input.value = segment.text || '';
+      input.addEventListener('input', () => {
+        document.querySelectorAll(`.subtitle-edit[data-segment-index="${segmentIndex}"]`).forEach(other => {
+          if (other !== input) other.value = input.value;
+        });
+      });
+      row.append(segmentTime, input); editor.append(row);
+    });
+    card.append(head, title, reason, hook, preview, previewPlay, previewHelp, rangeEditor, titleLabel, editor); candidateList.append(card);
+  });
+  candidateSection.hidden = false;
+}
+
+function showOutputs(outputs) {
+  outputList.replaceChildren();
+  (outputs || []).forEach((item, index) => {
+    const card = document.createElement('article'); card.className = 'output-card';
+    const title = document.createElement('strong');
+    title.textContent = item.type === 'montage'
+      ? `見どころ再編集 / ${Math.round(item.duration)}秒`
+      : `切り抜き #${index + 1} / ${Math.round(item.duration)}秒`;
+    if (item.subtitles) title.textContent += ' / 字幕付き';
+    const video = document.createElement('video'); video.controls = true; video.preload = 'metadata';
+    video.src = `/api/outputs/${encodeURIComponent(item.filename)}?v=${encodeURIComponent(item.cache_key || Date.now())}`;
+    const link = document.createElement('a'); link.className = 'download'; link.download = item.filename;
+    link.href = video.src; link.textContent = 'MP4を保存';
+    const deleteButton = document.createElement('button'); deleteButton.className = 'delete-output';
+    deleteButton.textContent = '動画を削除';
+    deleteButton.addEventListener('click', async () => {
+      if (!confirm('この完成動画を削除しますか？この操作は取り消せません。')) return;
+      deleteButton.disabled = true;
+      try {
+        const response = await fetch(`/api/jobs/${currentJobId}/outputs/${encodeURIComponent(item.filename)}`, { method: 'DELETE' });
+        const json = await response.json();
+        if (!response.ok) throw new Error(json.detail || '動画を削除できませんでした');
+        showOutputs(json.outputs);
+        status.className = 'ok'; status.textContent = '✓ 完成動画を削除しました';
+      } catch (error) {
+        deleteButton.disabled = false; status.className = 'ng'; status.textContent = `⚠ ${error.message}`;
+      }
+    });
+    const metadata = document.createElement('div'); metadata.className = 'post-metadata';
+    const metadataTitle = document.createElement('strong'); metadataTitle.textContent = '投稿用テキスト（自動生成）';
+    const postTitleLabel = document.createElement('label'); postTitleLabel.textContent = 'タイトル案';
+    const postTitle = document.createElement('input'); postTitle.value = item.post_title || item.title || '';
+    const descriptionLabel = document.createElement('label'); descriptionLabel.textContent = '概要欄案';
+    const description = document.createElement('textarea'); description.rows = 7; description.value = item.description || '';
+    postTitleLabel.append(postTitle); descriptionLabel.append(description);
+    const copyTitle = document.createElement('button'); copyTitle.className = 'copy-metadata'; copyTitle.textContent = 'タイトルをコピー';
+    const copyDescription = document.createElement('button'); copyDescription.className = 'copy-metadata'; copyDescription.textContent = '概要欄をコピー';
+    copyTitle.addEventListener('click', () => copyText(postTitle.value, copyTitle));
+    copyDescription.addEventListener('click', () => copyText(description.value, copyDescription));
+    metadata.append(metadataTitle, postTitleLabel, descriptionLabel, copyTitle, copyDescription);
+    card.append(title, video, link, deleteButton, metadata); outputList.append(card);
+  });
+  outputSection.hidden = !(outputs || []).length;
+}
+
+async function copyText(value, button) {
+  const original = button.textContent;
+  try {
+    await navigator.clipboard.writeText(value);
+    button.textContent = 'コピーしました';
+  } catch (_) {
+    status.className = 'ng'; status.textContent = '⚠ コピーできませんでした。文章を選択してコピーしてください。';
+  }
+  setTimeout(() => { button.textContent = original; }, 1500);
+}
+
+function selectedCandidateIndices() {
+  return Array.from(document.querySelectorAll('.candidate-check:checked')).map(input => Number(input.dataset.index));
+}
+
+function editedTitles() {
+  return Object.fromEntries(Array.from(document.querySelectorAll('.title-input')).map(input => [input.dataset.index, input.value]));
+}
+
+function editedSubtitles() {
+  const values = {};
+  document.querySelectorAll('.subtitle-edit').forEach(input => { values[input.dataset.segmentIndex] = input.value; });
+  return values;
+}
+
+function editedCandidateRanges() {
+  const ranges = {};
+  document.querySelectorAll('.candidate-start').forEach(input => {
+    const end = document.querySelector(`.candidate-end[data-index="${input.dataset.index}"]`);
+    ranges[input.dataset.index] = { start: Number(input.value), end: Number(end.value) };
+  });
+  return ranges;
+}
+
+function excludedSegmentIndices() {
+  return [...new Set(Array.from(document.querySelectorAll('.subtitle-edit'))
+    .filter(input => !input.value.trim()).map(input => Number(input.dataset.segmentIndex)))];
+}
+
+function candidateFramingPositions() {
+  return Object.fromEntries(Array.from(document.querySelectorAll('.candidate-framing'))
+    .map(select => [select.dataset.index, select.value]));
+}
+
+subtitleSize.addEventListener('input', () => { subtitleSizeValue.textContent = subtitleSize.value; });
+titleSize.addEventListener('input', () => { titleSizeValue.textContent = titleSize.value; });
+titleMarginTop.addEventListener('input', () => { titleMarginTopValue.textContent = titleMarginTop.value; });
+endingSize.addEventListener('input', () => { endingSizeValue.textContent = endingSize.value; });
+
+function restoreJob(job) {
+  currentJobId = job.job_id;
+  if (job.original_name) fileName.textContent = `前回の動画: ${job.original_name}`;
+  if (job.transcript) {
+    currentTranscript = job.transcript;
+    showTranscript(job.transcript);
+    transcribeBtn.hidden = false;
+    analyzeBtn.hidden = false;
+  }
+  if (job.analysis) showCandidates(job.analysis);
+  if (job.outputs) showOutputs(job.outputs);
+  if (['queued_for_youtube_download', 'downloading_youtube', 'queued_for_transcription', 'transcribing', 'queued_for_analysis', 'analyzing_candidates', 'rendering_video'].includes(job.status)) {
+    progress.hidden = false;
+    pollTimer = setInterval(pollJob, 1000); pollJob();
+  }
+}
+
+async function pollJob() {
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}`);
+    const job = await res.json();
+    if (!res.ok) throw new Error(job.detail || 'ジョブの取得に失敗しました');
+    if (job.transcript) currentTranscript = job.transcript;
+    const p = job.progress || { percent: 0, message: '処理中です' };
+    progressBar.style.width = `${p.percent}%`;
+    status.textContent = p.message;
+    if (job.status === 'uploaded') {
+      clearInterval(pollTimer); pollTimer = null;
+      youtubeBtn.disabled = false;
+      fileName.textContent = job.source === 'youtube' ? `YouTube: ${job.original_name}` : job.original_name;
+      status.className = 'ok';
+      status.textContent = `✓ 読み込み完了 / ${job.original_name}`;
+      transcribeBtn.hidden = false;
+    } else if (job.status === 'transcribed') {
+      clearInterval(pollTimer); pollTimer = null;
+      transcribeBtn.disabled = false;
+      status.textContent = `✓ 文字起こし完了 / ${job.transcript.segments.length} セグメント`;
+      showTranscript(job.transcript);
+      analyzeBtn.hidden = false;
+    } else if (job.status === 'candidates_analyzed') {
+      clearInterval(pollTimer); pollTimer = null;
+      analyzeBtn.disabled = false;
+      status.className = 'ok';
+      status.textContent = `✓ ショート候補 ${job.analysis.candidates.length}件の解析が完了しました`;
+      showCandidates(job.analysis);
+    } else if (job.status === 'transcription_failed') {
+      clearInterval(pollTimer); pollTimer = null;
+      transcribeBtn.disabled = false;
+      status.textContent = `⚠ ${job.error || '文字起こしに失敗しました'}`;
+      status.className = 'ng';
+    } else if (job.status === 'candidate_analysis_failed') {
+      clearInterval(pollTimer); pollTimer = null;
+      analyzeBtn.disabled = false;
+      status.textContent = `⚠ ${job.error || '候補解析に失敗しました'}`;
+      status.className = 'ng';
+    } else if (job.status === 'youtube_download_failed') {
+      clearInterval(pollTimer); pollTimer = null;
+      youtubeBtn.disabled = false;
+      status.textContent = `⚠ ${job.error || 'YouTube動画の読み込みに失敗しました'}`;
+      status.className = 'ng';
+    } else if (job.status === 'videos_rendered') {
+      clearInterval(pollTimer); pollTimer = null;
+      individualBtn.disabled = false; montageBtn.disabled = false;
+      status.className = 'ok'; status.textContent = '✓ 動画の書き出しが完了しました';
+      showOutputs(job.outputs);
+    } else if (job.status === 'video_render_failed') {
+      clearInterval(pollTimer); pollTimer = null;
+      individualBtn.disabled = false; montageBtn.disabled = false;
+      status.textContent = `⚠ ${job.error || '動画の書き出しに失敗しました'}`;
+      status.className = 'ng';
+    }
+  } catch (error) {
+    clearInterval(pollTimer); pollTimer = null;
+    transcribeBtn.disabled = false;
+    status.textContent = `⚠ ${error.message}`; status.className = 'ng';
+  }
+}
+
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', e => { if (!openedDirectly) selectFile(e.dataTransfer.files[0]); });
+drop.addEventListener('click', () => { if (!openedDirectly) fileInput.click(); });
+drop.addEventListener('keydown', e => {
+  if (!openedDirectly && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); fileInput.click(); }
+});
+fileInput.addEventListener('change', () => selectFile(fileInput.files[0]));
+
+btn.addEventListener('click', async () => {
+  const f = selectedFile;
+  if (!f) { status.textContent = '動画を選択してください。'; return; }
+  status.textContent = `読み込み中: ${f.name}`;
+  result.hidden = true;
+  const fd = new FormData(); fd.append('file', f);
+  try {
+    const res = await fetch('/api/upload', { method: 'POST', body: fd });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.detail || 'エラーが発生しました');
+    currentJobId = json.job_id;
+    status.className = 'ok';
+    status.textContent = `✓ 読み込み完了 / Job ID: ${json.job_id}`;
+    transcribeBtn.hidden = false; progress.hidden = true;
+    analyzeBtn.hidden = true; candidateSection.hidden = true;
+    result.textContent = JSON.stringify(json, null, 2); result.hidden = false;
+  } catch (error) { status.textContent = `⚠ ${error.message}`; status.className = 'ng'; }
+});
+
+youtubeBtn.addEventListener('click', async () => {
+  const url = youtubeUrl.value.trim();
+  if (!url) { status.textContent = 'YouTubeのURLを入力してください。'; return; }
+  youtubeBtn.disabled = true; progress.hidden = false; progressBar.style.width = '0%';
+  candidateSection.hidden = true; transcribeBtn.hidden = true; analyzeBtn.hidden = true;
+  status.className = ''; status.textContent = 'YouTube動画の読み込みを開始しています…';
+  try {
+    const res = await fetch('/api/youtube', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.detail || 'YouTube動画を読み込めませんでした');
+    currentJobId = json.job_id; status.textContent = json.progress.message;
+    pollTimer = setInterval(pollJob, 1000); pollJob();
+  } catch (error) {
+    youtubeBtn.disabled = false; status.className = 'ng'; status.textContent = `⚠ ${error.message}`;
+  }
+});
+
+transcribeBtn.addEventListener('click', async () => {
+  transcribeBtn.disabled = true; progress.hidden = false;
+  progressBar.style.width = '0%'; status.className = '';
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/transcribe`, { method: 'POST' });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.detail || '文字起こしを開始できませんでした');
+    status.textContent = json.progress.message;
+    pollTimer = setInterval(pollJob, 1000); pollJob();
+  } catch (error) {
+    transcribeBtn.disabled = false; status.className = 'ng';
+    status.textContent = `⚠ ${error.message}`;
+  }
+});
+
+analyzeBtn.addEventListener('click', async () => {
+  analyzeBtn.disabled = true; candidateSection.hidden = true; progress.hidden = false;
+  progressBar.style.width = '0%'; status.className = '';
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/analyze-candidates`, { method: 'POST' });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.detail || '候補解析を開始できませんでした');
+    status.textContent = json.progress.message;
+    pollTimer = setInterval(pollJob, 1000); pollJob();
+  } catch (error) {
+    analyzeBtn.disabled = false; status.className = 'ng';
+    status.textContent = `⚠ ${error.message}`;
+  }
+});
+
+async function startRender(mode) {
+  const indices = selectedCandidateIndices();
+  if (!indices.length) { status.textContent = '生成する候補を選択してください。'; return; }
+  if (mode === 'montage' && indices.length < 2) { status.textContent = '再編集には2件以上選択してください。'; return; }
+  const ranges = editedCandidateRanges();
+  if (indices.some(index => !Number.isFinite(ranges[index].start) || !Number.isFinite(ranges[index].end) || ranges[index].end <= ranges[index].start)) {
+    status.textContent = '開始・終了秒を確認してください。終了は開始より後に設定します。'; return;
+  }
+  individualBtn.disabled = true; montageBtn.disabled = true; progress.hidden = false;
+  progressBar.style.width = '0%'; status.className = ''; status.textContent = '動画生成を開始しています…';
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/render`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode, candidate_indices: indices, include_subtitles: subtitleCheck.checked,
+        titles: editedTitles(), montage_title: montageTitle.value,
+        subtitle_size: Number(subtitleSize.value), subtitle_position: subtitlePosition.value,
+        title_size: Number(titleSize.value), title_margin_top: Number(titleMarginTop.value),
+        horizontal_positions: candidateFramingPositions(),
+        ending_text: endingText.value, ending_size: Number(endingSize.value),
+        ending_duration: Number(endingDuration.value),
+        subtitle_overrides: editedSubtitles(), candidate_ranges: ranges,
+        excluded_segment_indices: excludedSegmentIndices()
+      })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.detail || '動画生成を開始できませんでした');
+    status.textContent = json.progress.message;
+    pollTimer = setInterval(pollJob, 1000); pollJob();
+  } catch (error) {
+    individualBtn.disabled = false; montageBtn.disabled = false;
+    status.className = 'ng'; status.textContent = `⚠ ${error.message}`;
+  }
+}
+
+individualBtn.addEventListener('click', () => startRender('individual'));
+montageBtn.addEventListener('click', () => startRender('montage'));
+
+if (!openedDirectly) {
+  fetch('/api/jobs/latest').then(response => response.ok ? response.json() : null)
+    .then(job => { if (job) restoreJob(job); }).catch(() => {});
+}
+</script>
+</body>
+</html>
