@@ -108,21 +108,29 @@
       <div class="style-settings">
         <label class="subtitle-option"><input id="subtitleCheck" type="checkbox" checked /> 大きい日本語字幕を入れる</label>
         <div class="style-row">
-          <label>字幕サイズ <input id="subtitleSize" type="range" min="42" max="100" value="72" /> <span id="subtitleSizeValue">72</span></label>
+          <label>字幕サイズ <input id="subtitleSize" type="range" min="42" max="100" value="100" /> <span id="subtitleSizeValue">100</span></label>
           <label>字幕位置
             <select id="subtitlePosition">
-              <option value="upper">上</option><option value="middle">中央</option><option value="lower" selected>下</option>
+              <option value="upper" selected>上</option><option value="middle">中央</option><option value="lower">下</option>
             </select>
           </label>
+          <label>上下の微調整 <input id="subtitleY" type="range" min="200" max="1720" step="10" value="500" /> <span id="subtitleYValue">500</span></label>
         </div>
         <div class="style-row title-style-row">
-          <label>固定タイトルサイズ <input id="titleSize" type="range" min="28" max="200" value="52" /> <span id="titleSizeValue">52</span></label>
+          <label>固定タイトルサイズ <input id="titleSize" type="range" min="28" max="200" value="140" /> <span id="titleSizeValue">140</span></label>
           <label>固定タイトル位置 <input id="titleMarginTop" type="range" min="30" max="600" value="90" /> <span id="titleMarginTopValue">90</span></label>
         </div>
         <p class="engine">固定タイトル位置は、数値を大きくすると下へ移動します。</p>
         <label class="edit-label">見どころ再編集の固定タイトル
           <textarea id="montageTitle" class="montage-title" maxlength="84" rows="2">見どころまとめ</textarea>
         </label>
+        <label class="edit-label">下部に常時表示する固定テロップ（空欄で非表示）
+          <textarea id="footerText" class="montage-title" maxlength="120" rows="2">詳細は本編をチェック</textarea>
+        </label>
+        <div class="style-row title-style-row">
+          <label>下部固定テロップサイズ <input id="footerSize" type="range" min="28" max="140" value="119" /> <span id="footerSizeValue">119</span></label>
+          <label>下からの位置 <input id="footerMarginBottom" type="range" min="30" max="600" value="450" /> <span id="footerMarginBottomValue">450</span></label>
+        </div>
         <label class="edit-label">動画の最後に表示する締めテロップ（空欄で非表示）
           <textarea id="endingText" class="montage-title" maxlength="120" rows="2">続きは本編で！</textarea>
         </label>
@@ -170,11 +178,18 @@ const subtitleCheck = document.getElementById('subtitleCheck');
 const subtitleSize = document.getElementById('subtitleSize');
 const subtitleSizeValue = document.getElementById('subtitleSizeValue');
 const subtitlePosition = document.getElementById('subtitlePosition');
+const subtitleY = document.getElementById('subtitleY');
+const subtitleYValue = document.getElementById('subtitleYValue');
 const montageTitle = document.getElementById('montageTitle');
 const titleSize = document.getElementById('titleSize');
 const titleSizeValue = document.getElementById('titleSizeValue');
 const titleMarginTop = document.getElementById('titleMarginTop');
 const titleMarginTopValue = document.getElementById('titleMarginTopValue');
+const footerText = document.getElementById('footerText');
+const footerSize = document.getElementById('footerSize');
+const footerSizeValue = document.getElementById('footerSizeValue');
+const footerMarginBottom = document.getElementById('footerMarginBottom');
+const footerMarginBottomValue = document.getElementById('footerMarginBottomValue');
 const endingText = document.getElementById('endingText');
 const endingSize = document.getElementById('endingSize');
 const endingSizeValue = document.getElementById('endingSizeValue');
@@ -409,8 +424,15 @@ function candidateFramingPositions() {
 }
 
 subtitleSize.addEventListener('input', () => { subtitleSizeValue.textContent = subtitleSize.value; });
+subtitleY.addEventListener('input', () => { subtitleYValue.textContent = subtitleY.value; });
+subtitlePosition.addEventListener('change', () => {
+  subtitleY.value = { upper: 500, middle: 960, lower: 1500 }[subtitlePosition.value];
+  subtitleYValue.textContent = subtitleY.value;
+});
 titleSize.addEventListener('input', () => { titleSizeValue.textContent = titleSize.value; });
 titleMarginTop.addEventListener('input', () => { titleMarginTopValue.textContent = titleMarginTop.value; });
+footerSize.addEventListener('input', () => { footerSizeValue.textContent = footerSize.value; });
+footerMarginBottom.addEventListener('input', () => { footerMarginBottomValue.textContent = footerMarginBottom.value; });
 endingSize.addEventListener('input', () => { endingSizeValue.textContent = endingSize.value; });
 
 function restoreJob(job) {
@@ -585,8 +607,11 @@ async function startRender(mode) {
         mode, candidate_indices: indices, include_subtitles: subtitleCheck.checked,
         titles: editedTitles(), montage_title: montageTitle.value,
         subtitle_size: Number(subtitleSize.value), subtitle_position: subtitlePosition.value,
+        subtitle_y: Number(subtitleY.value),
         title_size: Number(titleSize.value), title_margin_top: Number(titleMarginTop.value),
         horizontal_positions: candidateFramingPositions(),
+        footer_text: footerText.value, footer_size: Number(footerSize.value),
+        footer_margin_bottom: Number(footerMarginBottom.value),
         ending_text: endingText.value, ending_size: Number(endingSize.value),
         ending_duration: Number(endingDuration.value),
         subtitle_overrides: editedSubtitles(), candidate_ranges: ranges,

@@ -86,6 +86,15 @@ class VideoRenderTest(unittest.TestCase):
         self.assertIn(" ", events[0]["text"])
         self.assertIn("　", events[0]["text"])
 
+    def test_subtitle_vertical_position_uses_exact_coordinate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "position.ass"
+            write_ass(
+                path, [{"start": 0, "end": 2, "text": "位置を微調整"}],
+                subtitle_y=1230,
+            )
+            self.assertIn(r"{\an5\pos(540,1230)}", path.read_text(encoding="utf-8"))
+
     def test_ending_telop_is_shown_only_at_end(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "ending.ass"
@@ -93,6 +102,24 @@ class VideoRenderTest(unittest.TestCase):
             content = path.read_text(encoding="utf-8")
             self.assertIn("Style: Ending,Hiragino Sans,120", content)
             self.assertIn("Dialogue: 2,0:00:07.50,0:00:10.00,Ending", content)
+
+    def test_optional_footer_telop_is_shown_for_the_full_video(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "footer.ass"
+            write_ass(
+                path, [], duration=10, footer_text="詳細は本編をチェック",
+                footer_size=54, footer_margin_bottom=130,
+            )
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("Style: Footer,Hiragino Sans,54", content)
+            self.assertIn(",2,70,70,130,1", content)
+            self.assertIn("Dialogue: 1,0:00:00.00,0:00:10.00,Footer", content)
+
+    def test_blank_footer_telop_is_not_written(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "blank-footer.ass"
+            write_ass(path, [], duration=10, footer_text="  ")
+            self.assertNotIn("Dialogue: 1,0:00:00.00,0:00:10.00,Footer", path.read_text(encoding="utf-8"))
 
     def test_montage_chooses_non_overlapping_short_clips(self) -> None:
         clips = choose_montage_clips(candidates(), segments())
@@ -148,7 +175,8 @@ class VideoRenderTest(unittest.TestCase):
             self.assertEqual(response.status_code, 202)
             submit.assert_called_once_with(
                 main.run_video_render, job_id, "montage", [0, 2], True,
-                {}, "見どころまとめ", 72, "lower", 52, 90, {},
+                {}, "見どころまとめ", 100, "upper", 500, 140, 90, {},
+                "詳細は本編をチェック", 119, 450,
                 "続きは本編で！", 96, 2.5, {}, {}, [],
             )
 
@@ -236,7 +264,9 @@ class VideoRenderTest(unittest.TestCase):
             ):
                 main.run_video_render(
                     job_id, "montage", [0, 1], True, {}, "見どころまとめ",
-                    72, "lower", 52, 90, {}, "続きは本編で！", 96, 2.5,
+                    72, "lower", 1500, 52, 90, {},
+                    "詳細は本編をチェック", 48, 90,
+                    "続きは本編で！", 96, 2.5,
                     {}, {}, [],
                 )
             saved = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))

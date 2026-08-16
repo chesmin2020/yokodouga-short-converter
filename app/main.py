@@ -186,9 +186,13 @@ def run_video_render(
     montage_title: str,
     subtitle_size: int,
     subtitle_position: str,
+    subtitle_y: int,
     title_size: int,
     title_margin_top: int,
     horizontal_positions: dict[int, str],
+    footer_text: str,
+    footer_size: int,
+    footer_margin_bottom: int,
     ending_text: str,
     ending_size: int,
     ending_duration: float,
@@ -244,16 +248,18 @@ def run_video_render(
         if mode == "individual":
             outputs = render_individual(
                 source, OUTPUT_DIR, job_id, candidates, segments, include_subtitles,
-                selected_titles, subtitle_size, subtitle_position,
+                selected_titles, subtitle_size, subtitle_position, subtitle_y,
                 title_size, title_margin_top, selected_positions,
+                footer_text, footer_size, footer_margin_bottom,
                 ending_text, ending_size, ending_duration,
                 excluded_segment_indices, progress,
             )
         else:
             outputs = render_montage(
                 source, OUTPUT_DIR, job_id, candidates, segments, include_subtitles,
-                montage_title, subtitle_size, subtitle_position,
+                montage_title, subtitle_size, subtitle_position, subtitle_y,
                 title_size, title_margin_top, selected_positions,
+                footer_text, footer_size, footer_margin_bottom,
                 ending_text, ending_size, ending_duration,
                 excluded_segment_indices, progress,
             )
@@ -388,11 +394,15 @@ class RenderRequest(BaseModel):
     include_subtitles: bool = True
     titles: dict[int, str] = Field(default_factory=dict)
     montage_title: str = "見どころまとめ"
-    subtitle_size: int = Field(default=72, ge=42, le=100)
-    subtitle_position: str = "lower"
-    title_size: int = Field(default=52, ge=28, le=200)
+    subtitle_size: int = Field(default=100, ge=42, le=100)
+    subtitle_position: str = "upper"
+    subtitle_y: int = Field(default=500, ge=200, le=1720)
+    title_size: int = Field(default=140, ge=28, le=200)
     title_margin_top: int = Field(default=90, ge=30, le=600)
     horizontal_positions: dict[int, str] = Field(default_factory=dict)
+    footer_text: str = "詳細は本編をチェック"
+    footer_size: int = Field(default=119, ge=28, le=140)
+    footer_margin_bottom: int = Field(default=450, ge=30, le=600)
     ending_text: str = "続きは本編で！"
     ending_size: int = Field(default=96, ge=36, le=200)
     ending_duration: float = Field(default=2.5, ge=0.5, le=10)
@@ -427,8 +437,9 @@ def start_video_render(job_id: str, request: RenderRequest) -> dict[str, Any]:
     executor.submit(
         run_video_render, job_id, request.mode, indices, request.include_subtitles,
         request.titles, request.montage_title[:84], request.subtitle_size,
-        request.subtitle_position, request.title_size, request.title_margin_top,
-        request.horizontal_positions, request.ending_text[:120], request.ending_size,
+        request.subtitle_position, request.subtitle_y, request.title_size, request.title_margin_top,
+        request.horizontal_positions, request.footer_text[:120], request.footer_size,
+        request.footer_margin_bottom, request.ending_text[:120], request.ending_size,
         request.ending_duration, request.subtitle_overrides, request.candidate_ranges,
         request.excluded_segment_indices,
     )

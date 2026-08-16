@@ -110,10 +110,14 @@ def write_ass(
     events: list[dict[str, Any]],
     title: str = "",
     duration: float = 0,
-    subtitle_size: int = 72,
-    subtitle_position: str = "lower",
-    title_size: int = 52,
+    subtitle_size: int = 100,
+    subtitle_position: str = "upper",
+    subtitle_y: int | None = None,
+    title_size: int = 140,
     title_margin_top: int = 90,
+    footer_text: str = "",
+    footer_size: int = 119,
+    footer_margin_bottom: int = 450,
     ending_text: str = "",
     ending_size: int = 96,
     ending_duration: float = 2.5,
@@ -121,6 +125,9 @@ def write_ass(
     font = os.getenv("SUBTITLE_FONT", "Hiragino Sans")
     alignment = {"upper": 8, "middle": 5, "lower": 2}.get(subtitle_position, 2)
     margin_v = {"upper": 330, "middle": 0, "lower": 270}.get(subtitle_position, 270)
+    if subtitle_y is None:
+        subtitle_y = {"upper": 500, "middle": 960, "lower": 1500}.get(subtitle_position, 500)
+    subtitle_y = max(200, min(1720, int(subtitle_y)))
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -131,6 +138,7 @@ WrapStyle: 0
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{font},{subtitle_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,{alignment},70,70,{margin_v},1
 Style: Title,{font},{title_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H90000000,-1,0,0,0,100,100,0,0,3,3,0,8,70,70,{title_margin_top},1
+Style: Footer,{font},{footer_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H90000000,-1,0,0,0,100,100,0,0,3,3,0,2,70,70,{footer_margin_bottom},1
 Style: Ending,{font},{ending_size},&H00FFFFFF,&H00FFFFFF,&H00101010,&H90000000,-1,0,0,0,100,100,0,0,3,4,0,5,70,70,0,1
 
 [Events]
@@ -146,6 +154,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         rows.append(
             f"Dialogue: 1,0:00:00.00,{_ass_time(duration)},Title,,0,0,0,,{clean_title}\n"
         )
+    footer_lines = [re.sub(r"[{}\\]", "", line).strip() for line in footer_text.splitlines()]
+    clean_footer = r"\N".join(line for line in footer_lines if line)[:120]
+    if clean_footer and duration > 0:
+        rows.append(
+            f"Dialogue: 1,0:00:00.00,{_ass_time(duration)},Footer,,0,0,0,,{clean_footer}\n"
+        )
     ending_lines = [re.sub(r"[{}\\]", "", line).strip() for line in ending_text.splitlines()]
     clean_ending = r"\N".join(line for line in ending_lines if line)[:120]
     if clean_ending and duration > 0:
@@ -159,7 +173,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         if r"\N" not in text and len(text) > 12:
             text = text[:12] + r"\N" + text[12:]
         rows.append(
-            f"Dialogue: 0,{_ass_time(float(event['start']))},{_ass_time(float(event['end']))},Default,,0,0,0,,{text}\n"
+            f"Dialogue: 0,{_ass_time(float(event['start']))},{_ass_time(float(event['end']))},Default,,0,0,0,,"
+            f"{{\\an5\\pos(540,{subtitle_y})}}{text}\n"
         )
     path.write_text(header + "".join(rows), encoding="utf-8")
 
@@ -176,23 +191,28 @@ def _render_clip(
     end: float,
     subtitle_events: list[dict[str, Any]] | None = None,
     title: str = "",
-    subtitle_size: int = 72,
-    subtitle_position: str = "lower",
-    title_size: int = 52,
+    subtitle_size: int = 100,
+    subtitle_position: str = "upper",
+    subtitle_y: int = 500,
+    title_size: int = 140,
     title_margin_top: int = 90,
     horizontal_position: str = "center",
+    footer_text: str = "",
+    footer_size: int = 119,
+    footer_margin_bottom: int = 450,
     ending_text: str = "",
     ending_size: int = 96,
     ending_duration: float = 2.5,
 ) -> None:
     render_filter = video_filter(horizontal_position)
     temporary: tempfile.TemporaryDirectory[str] | None = None
-    if subtitle_events or title:
+    if subtitle_events or title or footer_text or ending_text:
         temporary = tempfile.TemporaryDirectory(prefix="short_subtitles_")
         ass_path = Path(temporary.name) / "subtitles.ass"
         write_ass(
             ass_path, subtitle_events or [], title, end - start,
-            subtitle_size, subtitle_position, title_size, title_margin_top,
+            subtitle_size, subtitle_position, subtitle_y, title_size, title_margin_top,
+            footer_text, footer_size, footer_margin_bottom,
             ending_text, ending_size, ending_duration,
         )
         render_filter = _subtitle_filter(ass_path, horizontal_position)
@@ -351,9 +371,13 @@ def render_individual(
     titles: list[str],
     subtitle_size: int,
     subtitle_position: str,
+    subtitle_y: int,
     title_size: int,
     title_margin_top: int,
     horizontal_positions: list[str],
+    footer_text: str,
+    footer_size: int,
+    footer_margin_bottom: int,
     ending_text: str,
     ending_size: int,
     ending_duration: float,
@@ -383,8 +407,9 @@ def render_individual(
                 )
                 _render_clip(
                     source, part, source_range["start"], source_range["end"],
-                    subtitle_events, title, subtitle_size, subtitle_position,
+                    subtitle_events, title, subtitle_size, subtitle_position, subtitle_y,
                     title_size, title_margin_top, horizontal_position,
+                    footer_text, footer_size, footer_margin_bottom,
                     ending_text if part_index == len(ranges) - 1 else "",
                     ending_size, ending_duration,
                 )
@@ -416,9 +441,13 @@ def render_montage(
     title: str,
     subtitle_size: int,
     subtitle_position: str,
+    subtitle_y: int,
     title_size: int,
     title_margin_top: int,
     horizontal_positions: list[str],
+    footer_text: str,
+    footer_size: int,
+    footer_margin_bottom: int,
     ending_text: str,
     ending_size: int,
     ending_duration: float,
@@ -449,8 +478,9 @@ def render_montage(
                 if candidate_index < len(horizontal_positions) else "center"
             )
             _render_clip(source, clip_path, clip["start"], clip["end"], subtitle_events,
-                         title, subtitle_size, subtitle_position, title_size,
+                         title, subtitle_size, subtitle_position, subtitle_y, title_size,
                          title_margin_top, horizontal_position,
+                         footer_text, footer_size, footer_margin_bottom,
                          ending_text if index == len(kept_clips) else "",
                          ending_size, ending_duration)
             rendered.append(clip_path)
