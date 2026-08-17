@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import html
 import mimetypes
 import os
 import shutil
@@ -12,9 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -22,7 +24,17 @@ from pydantic import BaseModel, Field
 from app.candidate_analysis import analyze_transcript
 from app.transcription import transcribe_media
 from app.youtube_download import download_youtube_video, validate_youtube_url
-from app.video_render import _post_metadata, render_individual, render_montage
+from app.youtube_upload import (
+    authorization_url,
+    exchange_authorization_response,
+    list_channels,
+    load_credentials,
+    oauth_config,
+    oauth_redirect_uri,
+    remove_channel,
+    upload_video,
+)
+from app.video_render import generate_post_metadata, render_individual, render_montage
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -39,6 +51,7 @@ app = FastAPI(title="横動画ショート変換", version="0.6.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="transcription")
 job_lock = threading.Lock()
+oauth_states: dict[str, str] = {}
 
 
 def job_path(job_id: str) -> Path:
@@ -71,6 +84,60 @@ def update_job(job_id: str, **changes: Any) -> dict[str, Any]:
         temporary.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
     return job
+
+
+def update_youtube_upload(job_id: str, filename: str, **changes: Any) -> dict[str, Any]:
+    with job_lock:
+        path = job_path(job_id)
+        job = json.loads(path.read_text(encoding="utf-8"))
+        uploads = job.setdefault("youtube_uploads", {})
+        record = uploads.setdefault(filename, {})
+        record.update(changes)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    return record
+
+
+def run_youtube_upload(
+    job_id: str,
+    filename: str,
+    title: str,
+    description: str,
+    privacy_status: str,
+    channel_id: str,
+) -> None:
+    try:
+        path = OUTPUT_DIR / filename
+
+        def progress(percent: float, message: str) -> None:
+            update_youtube_upload(
+                job_id, filename, status="uploading", percent=round(percent, 1), message=message
+            )
+
+        result = upload_video(
+            path, title, description, privacy_status, channel_id, DATA_DIR, progress
+        )
+        update_youtube_upload(
+            job_id,
+            filename,
+            status="uploaded",
+            percent=100,
+            message="YouTubeへの投稿が完了しました",
+            privacy_status=privacy_status,
+            channel_id=channel_id,
+            **result,
+            error=None,
+        )
+    except Exception as exc:
+        update_youtube_upload(
+            job_id,
+            filename,
+            status="failed",
+            percent=0,
+            message="YouTubeへの投稿に失敗しました",
+            error=str(exc),
+        )
 
 
 def run_transcription(job_id: str) -> None:
@@ -219,7 +286,11 @@ def run_video_render(
         source = UPLOAD_DIR / job["stored_name"]
         raw_segments = job.get("transcript", {}).get("segments", [])
         segments = [
-            {**segment, "text": subtitle_overrides.get(index, segment.get("text", ""))}
+            {
+                **segment,
+                "text": subtitle_overrides.get(index, segment.get("text", "")),
+                "source_index": index,
+            }
             for index, segment in enumerate(raw_segments)
         ]
         for candidate in candidates:
@@ -228,8 +299,9 @@ def run_video_render(
                 for segment in segments
                 if float(segment["end"]) > float(candidate["start"])
                 and float(segment["start"]) < float(candidate["end"])
+                and int(segment["source_index"]) not in excluded_segment_indices
                 and str(segment.get("text", "")).strip()
-            )[:1200]
+            )[:6000]
         selected_titles = [
             titles.get(index, str(all_candidates[index].get("summary", "")))
             for index in candidate_indices
@@ -271,10 +343,14 @@ def run_video_render(
         }
         if mode == "individual":
             for output, candidate, title in zip(outputs, candidates, selected_titles):
-                output.update(_post_metadata(title, [candidate], **source_metadata))
+                progress(96, "字幕全体と元動画の情報から投稿文を作成しています")
+                output.update(generate_post_metadata(title, [candidate], **source_metadata))
         else:
             for output in outputs:
-                output.update(_post_metadata(montage_title, candidates, montage=True, **source_metadata))
+                progress(96, "字幕全体と元動画の情報から投稿文を作成しています")
+                output.update(generate_post_metadata(
+                    montage_title, candidates, montage=True, **source_metadata
+                ))
         cache_key = str(time.time_ns())
         for output in outputs:
             output["cache_key"] = cache_key
@@ -411,6 +487,18 @@ class RenderRequest(BaseModel):
     excluded_segment_indices: list[int] = Field(default_factory=list)
 
 
+class YouTubeUploadRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    description: str = Field(default="", max_length=5000)
+    privacy_status: str = "private"
+    channel_id: str = Field(min_length=1, max_length=200)
+
+
+class MetadataRegenerateRequest(BaseModel):
+    title: str = Field(default="", max_length=100)
+    transcript_text: str = Field(min_length=1, max_length=12000)
+
+
 @app.post("/api/jobs/{job_id}/render", status_code=202)
 def start_video_render(job_id: str, request: RenderRequest) -> dict[str, Any]:
     job = read_job(job_id)
@@ -457,6 +545,136 @@ def get_output(filename: str) -> FileResponse:
         path, media_type="video/mp4", filename=filename,
         headers={"Cache-Control": "no-store, max-age=0"},
     )
+
+
+@app.post("/api/jobs/{job_id}/outputs/{filename}/metadata")
+def regenerate_output_metadata(
+    job_id: str, filename: str, request: MetadataRegenerateRequest
+) -> dict[str, Any]:
+    job = read_job(job_id)
+    outputs = job.get("outputs", [])
+    output = next((item for item in outputs if item.get("filename") == filename), None)
+    if output is None:
+        raise HTTPException(status_code=404, detail="このジョブの動画が見つかりません")
+    candidate = {"transcript_excerpt": request.transcript_text.strip()}
+    metadata = generate_post_metadata(
+        request.title.strip() or str(output.get("title", "")),
+        [candidate],
+        montage=output.get("type") == "montage",
+        source_title=str(job.get("original_name", "")),
+        source_description=str(job.get("youtube_description", "")),
+        source_url=str(job.get("youtube_url", "")),
+        source_channel=str(job.get("youtube_channel", "")),
+    )
+    output.update(metadata)
+    update_job(job_id, outputs=outputs)
+    return output
+
+
+@app.get("/api/youtube/oauth/status")
+def youtube_oauth_status() -> dict[str, Any]:
+    configured = oauth_config(DATA_DIR) is not None
+    channels = list_channels(DATA_DIR) if configured else []
+    return {
+        "configured": configured,
+        "connected": bool(channels),
+        "channels": channels,
+        "redirect_uri": oauth_redirect_uri(),
+    }
+
+
+@app.get("/api/youtube/oauth/start")
+def start_youtube_oauth() -> RedirectResponse:
+    try:
+        url, state, code_verifier = authorization_url(DATA_DIR)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    oauth_states[state] = code_verifier
+    return RedirectResponse(url)
+
+
+@app.get("/api/youtube/oauth/callback", response_class=HTMLResponse)
+def youtube_oauth_callback(request: Request, state: str = "", error: str = "") -> HTMLResponse:
+    if error:
+        message = f"Google認証がキャンセルされました: {html.escape(error)}"
+        return HTMLResponse(f"<h1>{message}</h1>", status_code=400)
+    if not state or state not in oauth_states:
+        return HTMLResponse("<h1>認証リクエストが無効です</h1>", status_code=400)
+    code_verifier = oauth_states.pop(state)
+    try:
+        channel = exchange_authorization_response(
+            str(request.url), state, code_verifier, DATA_DIR
+        )
+    except Exception as exc:
+        return HTMLResponse(
+            f"<h1>YouTubeと接続できませんでした</h1><p>{html.escape(str(exc))}</p>",
+            status_code=400,
+        )
+    channel_title = html.escape(channel["title"])
+    return HTMLResponse(
+        "<!doctype html><meta charset=\"utf-8\"><title>YouTube接続完了</title>"
+        f"<h1>{channel_title} と接続しました</h1>"
+        "<p>この画面は閉じて大丈夫です。</p>"
+        "<script>if(window.opener){window.opener.postMessage({type:'youtube-connected'},"
+        "window.location.origin)};window.close();</script>"
+    )
+
+
+@app.delete("/api/youtube/oauth/{channel_id}")
+def disconnect_youtube(channel_id: str) -> dict[str, Any]:
+    remove_channel(DATA_DIR, channel_id)
+    return {"connected": bool(list_channels(DATA_DIR)), "channels": list_channels(DATA_DIR)}
+
+
+@app.post("/api/jobs/{job_id}/youtube-upload/{filename}", status_code=202)
+def start_youtube_upload(
+    job_id: str, filename: str, upload_request: YouTubeUploadRequest
+) -> dict[str, Any]:
+    if upload_request.privacy_status not in {"private", "unlisted", "public"}:
+        raise HTTPException(status_code=400, detail="公開設定が不正です")
+    if not load_credentials(DATA_DIR, upload_request.channel_id):
+        raise HTTPException(status_code=401, detail="先にYouTubeと接続してください")
+    job = read_job(job_id)
+    if Path(filename).name != filename or not filename.endswith(".mp4"):
+        raise HTTPException(status_code=404, detail="完成動画が見つかりません")
+    if not any(item.get("filename") == filename for item in job.get("outputs", [])):
+        raise HTTPException(status_code=404, detail="このジョブの完成動画が見つかりません")
+    if not (OUTPUT_DIR / filename).is_file():
+        raise HTTPException(status_code=404, detail="完成動画が見つかりません")
+    current = job.get("youtube_uploads", {}).get(filename, {})
+    if current.get("status") in {"queued", "uploading"}:
+        raise HTTPException(status_code=409, detail="この動画はYouTubeへ投稿中です")
+    record = update_youtube_upload(
+        job_id,
+        filename,
+        status="queued",
+        percent=0,
+        message="YouTubeへの投稿開始を待っています",
+        title=upload_request.title,
+        description=upload_request.description,
+        privacy_status=upload_request.privacy_status,
+        channel_id=upload_request.channel_id,
+        error=None,
+    )
+    executor.submit(
+        run_youtube_upload,
+        job_id,
+        filename,
+        upload_request.title,
+        upload_request.description,
+        upload_request.privacy_status,
+        upload_request.channel_id,
+    )
+    return record
+
+
+@app.get("/api/jobs/{job_id}/youtube-upload/{filename}")
+def get_youtube_upload(job_id: str, filename: str) -> dict[str, Any]:
+    job = read_job(job_id)
+    record = job.get("youtube_uploads", {}).get(filename)
+    if record is None:
+        raise HTTPException(status_code=404, detail="YouTube投稿履歴が見つかりません")
+    return record
 
 
 @app.get("/api/jobs/{job_id}/source")

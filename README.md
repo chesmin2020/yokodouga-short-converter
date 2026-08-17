@@ -45,8 +45,11 @@
 - 固定タイトルと字幕テロップ内の半角・全角スペースを保持
 - 固定タイトルを最大200まで拡大
 - 完成動画の最後だけに表示する締めテロップ（文章・サイズ・表示秒数）
-- 完成動画ごとの投稿タイトル・概要欄・ハッシュタグ自動生成とコピー
+- 完成動画ごとのYouTube概要欄・Instagram投稿文・TikTok投稿文・ハッシュタグ自動生成とコピー
 - YouTube素材では元動画のタイトル・概要欄・チャンネル・本編URLを参考に概要欄を生成
+- OpenAI API設定時は、選択区間の字幕全文と元YouTube概要欄をまとめて理解し、媒体別の投稿文を生成（失敗時はローカル生成へ自動切替）
+- Ollamaと`qwen3:4b`が起動している場合は、無料のローカルAIを最優先で使用（字幕や概要欄はMac内で処理）
+- Google OAuth認証後、完成動画をYouTube Shortsへバックグラウンド投稿（進捗・完了URL表示）
 - YouTube 403を避ける互換MP4優先取得と、時間を空けた自動再試行
 
 次の実装予定は、人物・顔追尾クロップです。
@@ -82,6 +85,27 @@ OpenAI APIを使う場合、元動画は送信されず、文字起こしテキ�
 - 公開または通常の限定公開URLに対応
 - 1URLにつき1動画のみ読み込み
 - ログイン必須の非公開動画は現時点では非対応
+
+## YouTube Shortsへ投稿する
+
+完成動画の「YouTubeへ投稿」は、最初にGoogle CloudのOAuth設定が必要です。
+
+1. Google Cloud Consoleでプロジェクトを作成
+2. `YouTube Data API v3`を有効化
+3. OAuth同意画面を設定し、自分のGoogleアカウントをテストユーザーに追加
+4. 「ウェブアプリケーション」のOAuthクライアントを作成
+5. 承認済みリダイレクトURIに `http://127.0.0.1:8765/api/youtube/oauth/callback` を追加
+6. `.env`にクライアントIDとシークレットを設定
+
+```text
+YOUTUBE_CLIENT_ID=Google CloudのクライアントID
+YOUTUBE_CLIENT_SECRET=Google Cloudのクライアントシークレット
+YOUTUBE_REDIRECT_URI=http://127.0.0.1:8765/api/youtube/oauth/callback
+```
+
+起動後に「YouTubeと接続」を押し、投稿先のYouTubeチャンネルを持つGoogleアカウントで許可します。認証トークンは `data/youtube_token.json` にローカル保存され、Gitには含まれません。
+
+未審査のGoogle Cloud APIプロジェクトでは、API経由の投稿が非公開に制限される場合があります。最初は「非公開」で投稿し、YouTube Studioで確認してください。
 
 ## Whisperのセットアップ
 

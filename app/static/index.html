@@ -59,6 +59,11 @@
     .post-metadata label { display: block; margin-top: 10px; font-size: 14px; font-weight: 700; }
     .post-metadata input, .post-metadata textarea { width: 100%; box-sizing: border-box; margin-top: 5px; padding: 9px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
     .copy-metadata { margin: 8px 8px 0 0; padding: 8px 12px; background: #3d5875; }
+    .youtube-publish { margin: 14px 0; padding: 14px; border-radius: 10px; background: #fff2f2; border: 1px solid #e2b4b4; }
+    .youtube-publish button { margin: 8px 8px 0 0; background: #c00; }
+    .youtube-publish select { margin: 8px 8px 0 0; padding: 8px; border: 1px solid #aaa; border-radius: 8px; }
+    .youtube-upload-message { display: block; margin-top: 8px; font-size: 14px; }
+    .youtube-result { display: inline-block; margin-top: 8px; color: #075fc9; font-weight: 700; }
     .notice { margin-bottom: 20px; padding: 16px; border: 1px solid #e5b200; border-radius: 12px; background: #fff8d8; color: #5f4800; }
     .source-title { margin-top: 26px; font-size: 18px; }
     .youtube-box { margin-top: 22px; padding: 20px; border-radius: 16px; background: #f0f3f8; }
@@ -147,6 +152,11 @@
     </div>
     <div class="outputs" id="outputSection" hidden>
       <h2>完成動画</h2>
+      <div class="youtube-publish" id="youtubeConnection">
+        <strong>YouTube Shorts投稿</strong>
+        <span class="youtube-upload-message" id="youtubeConnectionStatus">接続状況を確認中…</span>
+        <button id="youtubeConnectBtn" type="button">YouTubeチャンネルを追加</button>
+      </div>
       <div id="outputList"></div>
     </div>
     <pre id="result" hidden></pre>
@@ -174,6 +184,8 @@ const individualBtn = document.getElementById('individualBtn');
 const montageBtn = document.getElementById('montageBtn');
 const outputSection = document.getElementById('outputSection');
 const outputList = document.getElementById('outputList');
+const youtubeConnectionStatus = document.getElementById('youtubeConnectionStatus');
+const youtubeConnectBtn = document.getElementById('youtubeConnectBtn');
 const subtitleCheck = document.getElementById('subtitleCheck');
 const subtitleSize = document.getElementById('subtitleSize');
 const subtitleSizeValue = document.getElementById('subtitleSizeValue');
@@ -196,6 +208,7 @@ const endingSizeValue = document.getElementById('endingSizeValue');
 const endingDuration = document.getElementById('endingDuration');
 let currentJobId = null;
 let pollTimer = null;
+let youtubeChannels = [];
 let selectedFile = null;
 let currentTranscript = null;
 
@@ -334,7 +347,7 @@ function showCandidates(analysis) {
   candidateSection.hidden = false;
 }
 
-function showOutputs(outputs) {
+function showOutputs(outputs, youtubeUploads = {}) {
   outputList.replaceChildren();
   (outputs || []).forEach((item, index) => {
     const card = document.createElement('article'); card.className = 'output-card';
@@ -366,15 +379,111 @@ function showOutputs(outputs) {
     const metadataTitle = document.createElement('strong'); metadataTitle.textContent = '投稿用テキスト（自動生成）';
     const postTitleLabel = document.createElement('label'); postTitleLabel.textContent = 'タイトル案';
     const postTitle = document.createElement('input'); postTitle.value = item.post_title || item.title || '';
-    const descriptionLabel = document.createElement('label'); descriptionLabel.textContent = '概要欄案';
-    const description = document.createElement('textarea'); description.rows = 7; description.value = item.description || '';
+    const descriptionLabel = document.createElement('label'); descriptionLabel.textContent = 'YouTube概要欄案';
+    const description = document.createElement('textarea'); description.rows = 10; description.value = item.youtube_description || item.description || '';
+    const instagramLabel = document.createElement('label'); instagramLabel.textContent = 'Instagram投稿文案';
+    const instagramCaption = document.createElement('textarea'); instagramCaption.rows = 8; instagramCaption.value = item.instagram_caption || '';
+    const tiktokLabel = document.createElement('label'); tiktokLabel.textContent = 'TikTok投稿文案';
+    const tiktokCaption = document.createElement('textarea'); tiktokCaption.rows = 7; tiktokCaption.value = item.tiktok_caption || '';
     postTitleLabel.append(postTitle); descriptionLabel.append(description);
+    instagramLabel.append(instagramCaption); tiktokLabel.append(tiktokCaption);
     const copyTitle = document.createElement('button'); copyTitle.className = 'copy-metadata'; copyTitle.textContent = 'タイトルをコピー';
-    const copyDescription = document.createElement('button'); copyDescription.className = 'copy-metadata'; copyDescription.textContent = '概要欄をコピー';
+    const copyDescription = document.createElement('button'); copyDescription.className = 'copy-metadata'; copyDescription.textContent = 'YouTube概要欄をコピー';
+    const copyInstagram = document.createElement('button'); copyInstagram.className = 'copy-metadata'; copyInstagram.textContent = 'Instagram投稿文をコピー';
+    const copyTikTok = document.createElement('button'); copyTikTok.className = 'copy-metadata'; copyTikTok.textContent = 'TikTok投稿文をコピー';
+    const regenerateMetadata = document.createElement('button'); regenerateMetadata.className = 'copy-metadata'; regenerateMetadata.textContent = '編集後字幕から投稿文を再生成';
     copyTitle.addEventListener('click', () => copyText(postTitle.value, copyTitle));
     copyDescription.addEventListener('click', () => copyText(description.value, copyDescription));
-    metadata.append(metadataTitle, postTitleLabel, descriptionLabel, copyTitle, copyDescription);
-    card.append(title, video, link, deleteButton, metadata); outputList.append(card);
+    copyInstagram.addEventListener('click', () => copyText(instagramCaption.value, copyInstagram));
+    copyTikTok.addEventListener('click', () => copyText(tiktokCaption.value, copyTikTok));
+    regenerateMetadata.addEventListener('click', async () => {
+      const ranges = item.source_ranges || item.clips || [{ start: item.start, end: item.end }];
+      const transcriptText = (currentTranscript?.segments || []).filter(segment =>
+        ranges.some(range => Number(segment.end) > Number(range.start) && Number(segment.start) < Number(range.end))
+      ).map((segment, segmentIndex) => {
+        const sourceIndex = (currentTranscript?.segments || []).indexOf(segment);
+        const edited = document.querySelector(`.subtitle-edit[data-segment-index="${sourceIndex}"]`);
+        return edited ? edited.value.trim() : String(segment.text || '').trim();
+      }).filter(Boolean).join(' ');
+      if (!transcriptText) { status.className = 'ng'; status.textContent = '⚠ 再生成に使える編集後字幕がありません'; return; }
+      regenerateMetadata.disabled = true; regenerateMetadata.textContent = '内容を理解して生成中…';
+      try {
+        const response = await fetch(`/api/jobs/${currentJobId}/outputs/${encodeURIComponent(item.filename)}/metadata`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: postTitle.value, transcript_text: transcriptText })
+        });
+        const generated = await response.json();
+        if (!response.ok) throw new Error(generated.detail || '投稿文を再生成できませんでした');
+        postTitle.value = generated.post_title || postTitle.value;
+        description.value = generated.youtube_description || generated.description || '';
+        instagramCaption.value = generated.instagram_caption || '';
+        tiktokCaption.value = generated.tiktok_caption || '';
+        status.className = generated.metadata_engine === 'ollama' || generated.metadata_engine === 'openai' ? 'ok' : 'ng';
+        status.textContent = generated.metadata_engine === 'ollama' || generated.metadata_engine === 'openai'
+          ? '✓ 編集後字幕を要約して投稿文を再生成しました'
+          : '⚠ ローカルAIに接続できなかったため簡易版を表示しています';
+      } catch (error) { status.className = 'ng'; status.textContent = `⚠ ${error.message}`; }
+      finally { regenerateMetadata.disabled = false; regenerateMetadata.textContent = '編集後字幕から投稿文を再生成'; }
+    });
+    metadata.append(metadataTitle, regenerateMetadata, postTitleLabel, descriptionLabel, copyTitle, copyDescription,
+      instagramLabel, copyInstagram, tiktokLabel, copyTikTok);
+    const youtubePanel = document.createElement('div'); youtubePanel.className = 'youtube-publish';
+    const youtubeHeading = document.createElement('strong'); youtubeHeading.textContent = 'YouTube Shortsへ投稿';
+    const channel = document.createElement('select'); channel.setAttribute('aria-label', '投稿先YouTubeチャンネル');
+    youtubeChannels.forEach(item => {
+      const option = document.createElement('option'); option.value = item.channel_id; option.textContent = item.title; channel.append(option);
+    });
+    if (!youtubeChannels.length) {
+      const option = document.createElement('option'); option.value = ''; option.textContent = '先にチャンネルを接続してください'; channel.append(option);
+    }
+    const privacy = document.createElement('select'); privacy.setAttribute('aria-label', 'YouTube公開設定');
+    [['private', '非公開（推奨）'], ['unlisted', '限定公開'], ['public', '公開']].forEach(([value, label]) => {
+      const option = document.createElement('option'); option.value = value; option.textContent = label; privacy.append(option);
+    });
+    const uploadButton = document.createElement('button'); uploadButton.type = 'button';
+    uploadButton.textContent = youtubeChannels.length ? 'YouTubeへ投稿' : '投稿先チャンネルを接続';
+    const uploadMessage = document.createElement('span'); uploadMessage.className = 'youtube-upload-message';
+    const uploadResult = document.createElement('a'); uploadResult.className = 'youtube-result'; uploadResult.target = '_blank';
+    const applyUploadRecord = record => {
+      if (!record) return;
+      uploadMessage.textContent = record.error ? `⚠ ${record.error}` : (record.message || '');
+      uploadButton.disabled = ['queued', 'uploading'].includes(record.status);
+      privacy.value = record.privacy_status || 'private';
+      if (record.url) { uploadResult.href = record.url; uploadResult.textContent = 'YouTubeで動画を開く'; }
+    };
+    const pollYoutubeUpload = () => {
+      const timer = setInterval(async () => {
+        try {
+          const response = await fetch(`/api/jobs/${currentJobId}/youtube-upload/${encodeURIComponent(item.filename)}`);
+          const record = await response.json();
+          if (!response.ok) throw new Error(record.detail || '投稿状況を取得できません');
+          applyUploadRecord(record);
+          if (['uploaded', 'failed'].includes(record.status)) clearInterval(timer);
+        } catch (error) { clearInterval(timer); uploadButton.disabled = false; uploadMessage.textContent = `⚠ ${error.message}`; }
+      }, 1000);
+    };
+    uploadButton.addEventListener('click', async () => {
+      if (!channel.value) {
+        uploadMessage.textContent = 'Googleで投稿先チャンネルを選択してください…';
+        window.open('/api/youtube/oauth/start', 'youtube-oauth', 'width=620,height=760');
+        return;
+      }
+      if (!confirm(`「${channel.options[channel.selectedIndex].textContent}」へ「${privacy.options[privacy.selectedIndex].textContent}」で投稿しますか？`)) return;
+      uploadButton.disabled = true; uploadMessage.textContent = 'YouTube投稿を開始しています…';
+      try {
+        const response = await fetch(`/api/jobs/${currentJobId}/youtube-upload/${encodeURIComponent(item.filename)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: postTitle.value, description: description.value, privacy_status: privacy.value, channel_id: channel.value })
+        });
+        const record = await response.json();
+        if (!response.ok) throw new Error(record.detail || 'YouTube投稿を開始できません');
+        applyUploadRecord(record); pollYoutubeUpload();
+      } catch (error) { uploadButton.disabled = false; uploadMessage.textContent = `⚠ ${error.message}`; }
+    });
+    youtubePanel.append(youtubeHeading, document.createElement('br'), channel, privacy, uploadButton, uploadMessage, uploadResult);
+    applyUploadRecord(youtubeUploads[item.filename]);
+    if (youtubeUploads[item.filename] && ['queued', 'uploading'].includes(youtubeUploads[item.filename].status)) pollYoutubeUpload();
+    card.append(title, video, link, deleteButton, metadata, youtubePanel); outputList.append(card);
   });
   outputSection.hidden = !(outputs || []).length;
 }
@@ -389,6 +498,31 @@ async function copyText(value, button) {
   }
   setTimeout(() => { button.textContent = original; }, 1500);
 }
+
+async function refreshYoutubeConnection() {
+  try {
+    const response = await fetch('/api/youtube/oauth/status'); const info = await response.json();
+    youtubeChannels = info.channels || [];
+    youtubeConnectBtn.hidden = false;
+    youtubeConnectionStatus.textContent = info.connected
+      ? `✓ ${youtubeChannels.map(item => item.title).join('、')} と接続済みです`
+      : info.configured
+        ? 'YouTubeへ投稿するにはGoogleアカウントと接続してください。'
+        : '.envにYOUTUBE_CLIENT_IDとYOUTUBE_CLIENT_SECRETの設定が必要です。';
+    youtubeConnectBtn.textContent = info.connected ? '別のチャンネルを追加' : 'YouTubeチャンネルを追加';
+    youtubeConnectBtn.disabled = !info.configured;
+    if (currentJobId) {
+      try { const jobResponse = await fetch(`/api/jobs/${currentJobId}`); const job = await jobResponse.json(); if (job.outputs) showOutputs(job.outputs, job.youtube_uploads || {}); } catch (_) {}
+    }
+  } catch (_) { youtubeConnectionStatus.textContent = 'YouTube接続状況を確認できません。'; }
+}
+
+youtubeConnectBtn.addEventListener('click', () => {
+  window.open('/api/youtube/oauth/start', 'youtube-oauth', 'width=620,height=760');
+});
+window.addEventListener('message', event => {
+  if (event.origin === window.location.origin && event.data && event.data.type === 'youtube-connected') refreshYoutubeConnection();
+});
 
 function selectedCandidateIndices() {
   return Array.from(document.querySelectorAll('.candidate-check:checked')).map(input => Number(input.dataset.index));
@@ -445,7 +579,7 @@ function restoreJob(job) {
     analyzeBtn.hidden = false;
   }
   if (job.analysis) showCandidates(job.analysis);
-  if (job.outputs) showOutputs(job.outputs);
+  if (job.outputs) showOutputs(job.outputs, job.youtube_uploads || {});
   if (['queued_for_youtube_download', 'downloading_youtube', 'queued_for_transcription', 'transcribing', 'queued_for_analysis', 'analyzing_candidates', 'rendering_video'].includes(job.status)) {
     progress.hidden = false;
     pollTimer = setInterval(pollJob, 1000); pollJob();
@@ -632,6 +766,7 @@ individualBtn.addEventListener('click', () => startRender('individual'));
 montageBtn.addEventListener('click', () => startRender('montage'));
 
 if (!openedDirectly) {
+  refreshYoutubeConnection();
   fetch('/api/jobs/latest').then(response => response.ok ? response.json() : null)
     .then(job => { if (job) restoreJob(job); }).catch(() => {});
 }

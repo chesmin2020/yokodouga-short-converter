@@ -3,6 +3,9 @@ from __future__ import annotations
 import subprocess
 import tempfile
 import os
+import json
+import urllib.error
+import urllib.request
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -327,18 +330,17 @@ def _post_metadata(
     post_title = (title.strip() or ("見どころまとめ" if montage else (summaries[0] if summaries else "ショート動画")))
     if not post_title.endswith(("！", "？", "!", "?")):
         post_title += "｜Shorts"
-    lines = []
+    topic = title.strip() or (summaries[0] if summaries else "今回の見どころ")
+    excerpt = str(candidates[0].get("transcript_excerpt", "")).strip() if candidates else ""
+    coherent_excerpt = re.sub(r"\s+", "", excerpt)
+    coherent_excerpt = coherent_excerpt[:100].rstrip("、。 ")
+
+    lines = [f"今回のショートでは「{topic[:100]}」を紹介します。"]
     if montage and summaries:
-        lines.append("動画の見どころを短くまとめました。")
+        lines.extend(["", "見どころ"])
         lines.extend(f"・{summary}" for summary in summaries[:5])
-    elif summaries:
-        lines.append(summaries[0])
-        excerpt = str(candidates[0].get("transcript_excerpt", "")).strip()
-        sentences = [part.strip() for part in re.split(r"(?<=[。！？!?])", excerpt) if part.strip()]
-        if sentences:
-            lines.extend(["", "この動画のポイント", *[f"・{sentence[:100]}" for sentence in sentences[:3]]])
-    if hooks:
-        lines.extend(["", f"注目ポイント：{hooks[0]}"])
+    elif coherent_excerpt:
+        lines.extend(["", coherent_excerpt + "。"])
     reference_lines = []
     for line in source_description.splitlines():
         cleaned = line.strip()
@@ -357,8 +359,150 @@ def _post_metadata(
         lines.extend(["", f"チャンネル：{source_channel}"])
     if source_url:
         lines.extend(["", f"本編はこちら：{source_url}"])
-    lines.extend(["", "気になった方は、ぜひ本編もご覧ください！", "", "#Shorts #ショート動画"])
-    return {"post_title": post_title[:100], "description": "\n".join(lines).strip()}
+    lines.extend([
+        "", "感想や気になったポイントを、ぜひコメントで教えてください。",
+        "チャンネル登録・高評価もよろしくお願いします！",
+        "", "#Shorts #ショート動画",
+    ])
+    youtube_description = "\n".join(lines).strip()
+
+    instagram_lines = [
+        f"【{title.strip() or topic}】",
+        "", f"{topic}",
+    ]
+    if coherent_excerpt:
+        instagram_lines.extend(["", coherent_excerpt + "。"])
+    instagram_lines.extend([
+        "", "あとで見返せるように保存がおすすめです📌",
+        "感想はコメントで教えてください！",
+        "", "#リール #動画 #おすすめ #学び #InstagramReels",
+    ])
+
+    tiktok_hook = topic
+    tiktok_lines = [
+        f"{tiktok_hook} 👀",
+        "", f"今回は「{topic}」を短くまとめました。",
+        "最後まで見て、あなたの感想をコメントで教えてください！",
+        "", "#TikTok #おすすめ #おすすめにのりたい #動画 #ショート動画",
+    ]
+    return {
+        "post_title": post_title[:100],
+        "description": youtube_description,
+        "youtube_description": youtube_description,
+        "instagram_caption": "\n".join(instagram_lines).strip(),
+        "tiktok_caption": "\n".join(tiktok_lines).strip(),
+    }
+
+
+def generate_post_metadata(
+    title: str,
+    candidates: list[dict[str, Any]],
+    montage: bool = False,
+    source_title: str = "",
+    source_description: str = "",
+    source_url: str = "",
+    source_channel: str = "",
+) -> dict[str, str]:
+    """Understand the selected transcript as a whole and write platform-specific copy."""
+    fallback = _post_metadata(
+        title, candidates, montage, source_title, source_description, source_url, source_channel
+    )
+    selected_sections = []
+    for index, candidate in enumerate(candidates, 1):
+        selected_sections.append(
+            f"[選択区間{index}の編集確定後テキスト]\n"
+            f"{candidate.get('transcript_excerpt', '')}"
+        )
+    prompt = f"""以下はショート動画に実際に含まれる字幕全文と、元YouTube動画の情報です。
+「編集確定後テキスト」が内容判断の最優先かつ唯一の正解です。
+編集で削除された文章や、編集前にしか存在しない情報は投稿文へ含めないでください。
+字幕を箇条書きで切り貼りせず、前後をつなげて話題・主張・結論を理解してください。
+元動画の概要欄は固有名詞や背景を理解する補助情報としてのみ使い、編集確定後テキストにない話題を追加しないでください。
+意味が曖昧な字幕は自然に補正して要約し、誇張・断定・架空の情報は避けてください。
+文字起こし特有の言い直し・相づち・重複を除き、投稿文だけを読んでも内容が一貫して分かる文章にしてください。
+字幕に結論がない場合は結論を創作せず、「動画では〜について話しています」と表現してください。
+字幕の文章をそのまま連結・転載してはいけません。内容を理解したうえで、別の簡潔な日本語に言い換えてください。
+YouTube概要欄の内容要約は2〜3文、合計120〜220文字程度に収め、主題・重要点・結論の順で構成してください。
+InstagramとTikTokも字幕の引用ではなく、各媒体向けに短く要約してください。
+字幕に明記されていない操作手順、設定画面、効果、注意事項、商品情報を補ってはいけません。
+「一般的には正しそうな知識」も追加せず、この字幕で実際に話されている範囲だけを要約してください。
+
+次のJSONだけを返してください。
+{{
+  "post_title": "YouTube Shorts向け100文字以内のタイトル",
+  "youtube_description": "自然な導入、内容の要約、本編への導線、コメント促進、関連ハッシュタグを含む概要欄",
+  "instagram_caption": "冒頭フック、読みやすい要約、保存・コメント促進、厳選したハッシュタグを含むReels投稿文",
+  "tiktok_caption": "短いフック、内容の核心、コメント促進、厳選したハッシュタグを含むTikTok投稿文"
+}}
+
+固定テロップ: {title}
+元動画タイトル: {source_title[:300]}
+元チャンネル: {source_channel[:200]}
+元動画URL: {source_url[:500]}
+元YouTube概要欄:
+{source_description[:2500]}
+
+ショートに含まれる内容:
+{chr(10).join(selected_sections)}
+"""
+
+    def validated(parsed: dict[str, Any], engine: str, model: str) -> dict[str, str] | None:
+        post_title = str(parsed.get("post_title", "")).strip()[:100]
+        youtube_description = str(parsed.get("youtube_description", "")).strip()[:5000]
+        instagram_caption = str(parsed.get("instagram_caption", "")).strip()[:2200]
+        tiktok_caption = str(parsed.get("tiktok_caption", "")).strip()[:2200]
+        if not all((post_title, youtube_description, instagram_caption, tiktok_caption)):
+            return None
+        return {
+            "post_title": post_title,
+            "description": youtube_description,
+            "youtube_description": youtube_description,
+            "instagram_caption": instagram_caption,
+            "tiktok_caption": tiktok_caption,
+            "metadata_engine": engine,
+            "metadata_model": model,
+        }
+
+    ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:4b").strip()
+    ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
+    try:
+        request = urllib.request.Request(
+            f"{ollama_url}/api/generate",
+            data=json.dumps({
+                "model": ollama_model,
+                "prompt": prompt,
+                "stream": False,
+                "think": False,
+                "format": "json",
+                "options": {"temperature": 0.1, "num_predict": 900},
+            }).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=240) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        result = validated(json.loads(payload["response"]), "ollama", ollama_model)
+        if result:
+            return result
+    except (OSError, KeyError, ValueError, json.JSONDecodeError, urllib.error.URLError):
+        pass
+
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        return fallback
+    try:
+        from openai import OpenAI
+
+        model = os.getenv("OPENAI_MODEL", "gpt-5.6-terra")
+        response = OpenAI(timeout=180.0).responses.create(
+            model=model,
+            reasoning={"effort": "low"},
+            input=prompt,
+            text={"format": {"type": "json_object"}},
+        )
+        parsed = json.loads(response.output_text)
+        return validated(parsed, "openai", model) or fallback
+    except Exception:
+        return fallback
 
 
 def render_individual(

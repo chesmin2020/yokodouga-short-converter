@@ -14,6 +14,7 @@ from app.video_render import (
     choose_montage_clips,
     _kept_ranges,
     _post_metadata,
+    generate_post_metadata,
     subtitle_events_for_range,
     write_ass,
     video_filter,
@@ -154,10 +155,54 @@ class VideoRenderTest(unittest.TestCase):
             source_url="https://youtu.be/abcdefghijk", source_channel="テストチャンネル",
         )
         self.assertIn("驚きの新機能", metadata["post_title"])
-        self.assertIn("便利な機能を紹介", metadata["description"])
+        self.assertIn("実際に使いました。特に操作が簡単でした。", metadata["description"])
         self.assertIn("#Shorts", metadata["description"])
         self.assertIn("製品を詳しくレビューした動画です。", metadata["description"])
         self.assertIn("https://youtu.be/abcdefghijk", metadata["description"])
+        self.assertIn("保存", metadata["instagram_caption"])
+        self.assertIn("#InstagramReels", metadata["instagram_caption"])
+        self.assertIn("コメント", metadata["tiktok_caption"])
+        self.assertIn("#TikTok", metadata["tiktok_caption"])
+        self.assertEqual(metadata["description"], metadata["youtube_description"])
+
+    def test_ai_metadata_falls_back_without_api_key(self) -> None:
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "", "OLLAMA_URL": "http://127.0.0.1:1"}):
+            metadata = generate_post_metadata(
+                "旅行前の注意点",
+                [{"summary": "通信手段を準備する", "transcript_excerpt": "現地では普段のサービスが使えないため、事前にeSIMを準備します。"}],
+                source_description="初めての旅行者向けの解説です。",
+            )
+        self.assertIn("事前にeSIMを準備します", metadata["youtube_description"])
+        self.assertIn("instagram_caption", metadata)
+        self.assertIn("tiktok_caption", metadata)
+
+    def test_metadata_regeneration_updates_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            jobs = Path(temp)
+            job_id = "abc123abc123"
+            filename = f"{job_id}_short_01.mp4"
+            (jobs / f"{job_id}.json").write_text(json.dumps({
+                "job_id": job_id,
+                "outputs": [{"filename": filename, "type": "individual", "title": "旅行の通信準備"}],
+            }), encoding="utf-8")
+            generated = {
+                "post_title": "旅行の通信準備",
+                "description": "自然な説明",
+                "youtube_description": "自然な説明",
+                "instagram_caption": "Instagram用",
+                "tiktok_caption": "TikTok用",
+                "metadata_engine": "ollama",
+            }
+            with patch.object(main, "JOBS_DIR", jobs), patch.object(main, "generate_post_metadata", return_value=generated) as generate:
+                response = TestClient(main.app).post(
+                    f"/api/jobs/{job_id}/outputs/{filename}/metadata",
+                    json={"title": "編集タイトル", "transcript_text": "編集後の字幕だけを使います。"},
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["metadata_engine"], "ollama")
+            self.assertEqual(generate.call_args.args[1][0]["transcript_excerpt"], "編集後の字幕だけを使います。")
+            saved = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["outputs"][0]["youtube_description"], "自然な説明")
 
     def test_render_endpoint_queues_selected_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -5,3 +5,5 @@ faster-whisper==1.2.1
 openai==2.47.0
 python-dotenv==1.2.1
 yt-dlp[default]==2026.7.4
+google-api-python-client>=2.0,<3
+google-auth-oauthlib>=1.2,<2
