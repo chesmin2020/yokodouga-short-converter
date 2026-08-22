@@ -47,7 +47,7 @@ CANDIDATES_DIR = DATA_DIR / "candidates"
 for p in (UPLOAD_DIR, OUTPUT_DIR, JOBS_DIR, TRANSCRIPTS_DIR, CANDIDATES_DIR):
     p.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="横動画ショート変換", version="0.6.0")
+app = FastAPI(title="横動画ショート変換", version="0.7.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="transcription")
 job_lock = threading.Lock()
@@ -175,7 +175,9 @@ def run_transcription(job_id: str) -> None:
         )
 
 
-def run_candidate_analysis(job_id: str) -> None:
+def run_candidate_analysis(
+    job_id: str, range_start: float | None = None, range_end: float | None = None
+) -> None:
     try:
         job = read_job(job_id)
         transcript = job.get("transcript")
@@ -190,7 +192,7 @@ def run_candidate_analysis(job_id: str) -> None:
                 progress={"percent": round(percent, 1), "message": message},
             )
 
-        analysis = analyze_transcript(transcript, progress)
+        analysis = analyze_transcript(transcript, progress, range_start, range_end)
         candidates_path = CANDIDATES_DIR / f"{job_id}.json"
         candidates_path.write_text(
             json.dumps(analysis, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -442,6 +444,11 @@ async def upload(file: UploadFile = File(...)) -> dict[str, Any]:
 
 class YouTubeRequest(BaseModel):
     url: str
+
+
+class CandidateAnalysisRequest(BaseModel):
+    range_start: float | None = Field(default=None, ge=0)
+    range_end: float | None = Field(default=None, gt=0)
 
 
 @app.post("/api/youtube", status_code=202)
@@ -743,7 +750,9 @@ def start_transcription(job_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/jobs/{job_id}/analyze-candidates", status_code=202)
-def start_candidate_analysis(job_id: str) -> dict[str, Any]:
+def start_candidate_analysis(
+    job_id: str, request: CandidateAnalysisRequest | None = None
+) -> dict[str, Any]:
     job = read_job(job_id)
     if job["status"] in {"queued_for_analysis", "analyzing_candidates"}:
         raise HTTPException(status_code=409, detail="候補解析はすでに実行中です")
@@ -751,11 +760,27 @@ def start_candidate_analysis(job_id: str) -> dict[str, Any]:
         "transcribed", "candidates_analyzed", "candidate_analysis_failed"
     }:
         raise HTTPException(status_code=409, detail="文字起こし完了後に候補解析できます")
+    range_start = request.range_start if request else None
+    range_end = request.range_end if request else None
+    if range_start is not None or range_end is not None:
+        start = range_start or 0.0
+        transcript = job.get("transcript", {})
+        duration = float(transcript.get("duration", 0) or 0)
+        if duration <= 0 and transcript.get("segments"):
+            duration = max(float(segment["end"]) for segment in transcript["segments"])
+        end = range_end if range_end is not None else duration
+        if end <= start:
+            raise HTTPException(status_code=400, detail="解析範囲の終了は開始より後にしてください")
+        if end - start < 10:
+            raise HTTPException(status_code=400, detail="解析範囲は10秒以上にしてください")
+        if duration and start >= duration:
+            raise HTTPException(status_code=400, detail="解析範囲の開始が動画の長さを超えています")
     updated = update_job(
         job_id,
         status="queued_for_analysis",
         progress={"percent": 0, "message": "候補解析の開始を待っています"},
+        analysis_request={"range_start": range_start, "range_end": range_end},
         error=None,
     )
-    executor.submit(run_candidate_analysis, job_id)
+    executor.submit(run_candidate_analysis, job_id, range_start, range_end)
     return updated

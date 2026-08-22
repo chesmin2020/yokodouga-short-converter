@@ -6,6 +6,8 @@ import re
 from typing import Any, Callable
 
 ProgressCallback = Callable[[float, str], None]
+MIN_CANDIDATE_SECONDS = 10.0
+MAX_CANDIDATE_SECONDS = 90.0
 
 POSITIVE_WORDS = (
     "実は", "結論", "一番", "驚", "比較", "違", "デメリット", "注意",
@@ -24,8 +26,9 @@ def _candidate_score(text: str, duration: float) -> tuple[int, list[str]]:
     if 30 <= duration <= 60:
         score += 22
         reasons.append("30〜60秒でショートに適した尺")
-    elif 20 <= duration <= 75:
+    elif MIN_CANDIDATE_SECONDS <= duration <= MAX_CANDIDATE_SECONDS:
         score += 10
+        reasons.append("10〜90秒の候補範囲に収まっている")
     score += min(12, sum(1 for word in POSITIVE_WORDS if word in text) * 3)
     if any(word in text for word in POSITIVE_WORDS):
         reasons.append("比較・結論・意外性につながる言葉がある")
@@ -67,7 +70,9 @@ def analyze_locally(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for segment in segments[start_index:]:
             selected.append(segment)
             duration = float(segment["end"]) - start
-            if duration >= 30:
+            if duration > MAX_CANDIDATE_SECONDS:
+                break
+            if duration >= MIN_CANDIDATE_SECONDS:
                 text = "".join(str(item["text"]).strip() for item in selected)
                 score, reasons = _candidate_score(text, duration)
                 windows.append({
@@ -79,7 +84,7 @@ def analyze_locally(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "reason": "、".join(reasons) or "ひとつの話題としてまとまっている",
                     "hook": _hook(text),
                 })
-                if duration >= 60:
+                if duration >= MAX_CANDIDATE_SECONDS:
                     break
     ranked: list[dict[str, Any]] = []
     for candidate in sorted(windows, key=lambda item: item["score"], reverse=True):
@@ -92,19 +97,18 @@ def analyze_locally(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 break
         if not overlap:
             ranked.append(candidate)
-        if len(ranked) == 8:
-            break
     return ranked
 
 
 def _validate_candidates(raw: Any, duration: float) -> list[dict[str, Any]]:
     items = raw.get("candidates", []) if isinstance(raw, dict) else []
     valid: list[dict[str, Any]] = []
-    for item in items[:10]:
+    for item in items:
         try:
             start = max(0.0, float(item["start"]))
             end = min(duration, float(item["end"])) if duration else float(item["end"])
-            if end <= start:
+            candidate_duration = end - start
+            if not MIN_CANDIDATE_SECONDS <= candidate_duration <= MAX_CANDIDATE_SECONDS:
                 continue
             valid.append({
                 "start": round(start, 2),
@@ -133,10 +137,10 @@ def analyze_with_openai(
         f"[{float(s['start']):.2f}-{float(s['end']):.2f}] {s['text']}"
         for s in transcript.get("segments", [])
     ]
-    progress(20, f"OpenAI ({model}) で動画全体を評価中")
-    prompt = """YouTube Shorts/TikTok/Reels向けの候補を5〜10件選び、JSONのみ返してください。
+    progress(20, f"OpenAI ({model}) で指定された範囲を評価中")
+    prompt = """YouTube Shorts/TikTok/Reels向けの候補を、固定件数で打ち切らず有用なものを幅広く選び、JSONのみ返してください。
 前後の文脈なしで理解でき、冒頭の引きが強く、結論・比較・本音・失敗・意外性・How-toのいずれかがある区間を優先します。
-30〜60秒を優先し、挨拶・広告・冗長な前置きは除外し、候補を重複させないでください。
+候補は10〜90秒、特に30〜60秒を優先し、挨拶・広告・冗長な前置きは除外し、候補を重複させないでください。
 必ず {"candidates":[{"start":0,"end":45,"score":90,"summary":"...","reason":"...","hook":"..."}]} 形式にします。
 
 文字起こし:
@@ -159,19 +163,57 @@ def analyze_with_openai(
     return candidates, model
 
 
+def _transcript_range(
+    transcript: dict[str, Any], range_start: float | None, range_end: float | None
+) -> tuple[dict[str, Any], float, float]:
+    total_duration = float(transcript.get("duration", 0) or 0)
+    segments = transcript.get("segments", [])
+    if total_duration <= 0 and segments:
+        total_duration = max(float(segment["end"]) for segment in segments)
+    start = max(0.0, float(range_start or 0))
+    end = total_duration if range_end is None else min(total_duration, float(range_end))
+    if end <= start:
+        raise RuntimeError("解析範囲の終了は開始より後にしてください")
+    if end - start < MIN_CANDIDATE_SECONDS:
+        raise RuntimeError("解析範囲は10秒以上にしてください")
+    selected = []
+    for segment in segments:
+        segment_start = float(segment["start"])
+        segment_end = float(segment["end"])
+        if segment_end <= start or segment_start >= end:
+            continue
+        selected.append({
+            **segment,
+            "start": max(start, segment_start),
+            "end": min(end, segment_end),
+        })
+    return {**transcript, "duration": end, "segments": selected}, start, end
+
+
 def analyze_transcript(
-    transcript: dict[str, Any], progress: ProgressCallback
+    transcript: dict[str, Any],
+    progress: ProgressCallback,
+    range_start: float | None = None,
+    range_end: float | None = None,
 ) -> dict[str, Any]:
     if not transcript.get("segments"):
         raise RuntimeError("文字起こしセグメントがありません")
+    scoped_transcript, actual_start, actual_end = _transcript_range(
+        transcript, range_start, range_end
+    )
     if os.getenv("OPENAI_API_KEY", "").strip():
-        candidates, model = analyze_with_openai(transcript, progress)
+        candidates, model = analyze_with_openai(scoped_transcript, progress)
         engine = "openai"
     else:
         progress(20, "ローカル評価で候補を探しています")
-        candidates = analyze_locally(transcript["segments"])
+        candidates = analyze_locally(scoped_transcript["segments"])
         model = None
         engine = "local"
     if not candidates:
         raise RuntimeError("候補区間を作成できませんでした。音声のあるより長い動画で再試行してください。")
-    return {"engine": engine, "model": model, "candidates": candidates}
+    return {
+        "engine": engine,
+        "model": model,
+        "analysis_range": {"start": actual_start, "end": actual_end},
+        "candidates": candidates,
+    }

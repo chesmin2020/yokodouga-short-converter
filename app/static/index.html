@@ -70,6 +70,15 @@
     .youtube-row { display: flex; gap: 10px; align-items: stretch; }
     .youtube-row input { flex: 1; min-width: 0; box-sizing: border-box; border: 1px solid #aaa; border-radius: 12px; padding: 12px 14px; font-size: 16px; }
     .youtube-row button { margin-top: 0; white-space: nowrap; }
+    .analysis-settings { margin-top: 18px; padding: 16px; border-radius: 12px; background: #f0f3f8; }
+    .analysis-settings fieldset { margin: 0; padding: 0; border: 0; }
+    .analysis-settings legend { margin-bottom: 10px; font-weight: 800; }
+    .analysis-options { display: flex; gap: 18px; flex-wrap: wrap; }
+    .analysis-options label { display: flex; align-items: center; gap: 6px; font-weight: 700; }
+    .analysis-range { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; }
+    .analysis-range label { font-size: 14px; font-weight: 700; }
+    .analysis-range input { width: 110px; margin-left: 5px; padding: 8px; border: 1px solid #aaa; border-radius: 8px; }
+    .show-more { display: block; margin: 14px auto 20px; }
     @media (max-width: 600px) { .wrap { padding: 20px 12px; } .card { padding: 20px; } h1 { font-size: 25px; } .youtube-row { flex-direction: column; } }
     pre { white-space: pre-wrap; word-break: break-word; background: #111; color: #eee; padding: 16px; border-radius: 12px; overflow: auto; }
     .ok { color: #127a34; }
@@ -103,13 +112,29 @@
       </div>
     </div>
     <button id="transcribeBtn" hidden>文字起こしを開始</button>
+    <div class="analysis-settings" id="analysisControls" hidden>
+      <fieldset>
+        <legend>候補を探す範囲</legend>
+        <div class="analysis-options">
+          <label><input type="radio" name="analysisScope" value="full" checked /> 動画全体</label>
+          <label><input type="radio" name="analysisScope" value="range" /> 指定範囲</label>
+        </div>
+        <div class="analysis-range" id="analysisRangeFields" hidden>
+          <label>開始（秒）<input id="analysisStart" type="number" min="0" step="0.1" value="0" /></label>
+          <label>終了（秒）<input id="analysisEnd" type="number" min="10" step="0.1" /></label>
+        </div>
+        <p class="engine">10〜90秒の候補を抽出します。30〜60秒を特に高く評価します。</p>
+      </fieldset>
+    </div>
     <button id="analyzeBtn" hidden>ショート候補を解析</button>
     <p id="status"></p>
     <div class="progress" id="progress" hidden><div id="progressBar"></div></div>
     <div class="candidates" id="candidateSection" hidden>
       <h2>ショート候補</h2>
       <p class="engine" id="engineLabel"></p>
+      <p class="engine" id="candidateCount"></p>
       <div id="candidateList"></div>
+      <button id="showMoreBtn" class="secondary show-more" type="button" hidden>さらに30件表示</button>
       <div class="style-settings">
         <label class="subtitle-option"><input id="subtitleCheck" type="checkbox" checked /> 大きい日本語字幕を入れる</label>
         <div class="style-row">
@@ -173,6 +198,10 @@ const fileName = document.getElementById('fileName');
 const fileNotice = document.getElementById('fileNotice');
 const transcribeBtn = document.getElementById('transcribeBtn');
 const analyzeBtn = document.getElementById('analyzeBtn');
+const analysisControls = document.getElementById('analysisControls');
+const analysisRangeFields = document.getElementById('analysisRangeFields');
+const analysisStart = document.getElementById('analysisStart');
+const analysisEnd = document.getElementById('analysisEnd');
 const youtubeUrl = document.getElementById('youtubeUrl');
 const youtubeBtn = document.getElementById('youtubeBtn');
 const progress = document.getElementById('progress');
@@ -180,6 +209,8 @@ const progressBar = document.getElementById('progressBar');
 const candidateSection = document.getElementById('candidateSection');
 const candidateList = document.getElementById('candidateList');
 const engineLabel = document.getElementById('engineLabel');
+const candidateCount = document.getElementById('candidateCount');
+const showMoreBtn = document.getElementById('showMoreBtn');
 const individualBtn = document.getElementById('individualBtn');
 const montageBtn = document.getElementById('montageBtn');
 const outputSection = document.getElementById('outputSection');
@@ -211,6 +242,8 @@ let pollTimer = null;
 let youtubeChannels = [];
 let selectedFile = null;
 let currentTranscript = null;
+let currentAnalysis = null;
+let visibleCandidateCount = 0;
 
 const openedDirectly = window.location.protocol === 'file:';
 if (openedDirectly) {
@@ -248,14 +281,17 @@ function formatTime(seconds) {
 
 function showTranscript(data) {
   currentTranscript = data;
+  const duration = Number(data && data.duration) || 0;
+  analysisStart.max = duration || '';
+  analysisEnd.max = duration || '';
+  analysisEnd.value = duration ? duration.toFixed(1) : '';
 }
 
-function showCandidates(analysis) {
-  candidateList.replaceChildren();
-  engineLabel.textContent = analysis.engine === 'openai'
-    ? `OpenAI ${analysis.model} によるAI評価`
-    : 'ローカル評価（OpenAI APIキーを設定するとAI評価に切り替わります）';
-  analysis.candidates.forEach((item, index) => {
+function appendCandidateBatch() {
+  const startIndex = visibleCandidateCount;
+  const batch = currentAnalysis.candidates.slice(startIndex, startIndex + 30);
+  batch.forEach((item, batchIndex) => {
+    const index = startIndex + batchIndex;
     const card = document.createElement('article'); card.className = 'candidate';
     const head = document.createElement('div'); head.className = 'candidate-head';
     const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'candidate-check';
@@ -344,6 +380,19 @@ function showCandidates(analysis) {
     });
     card.append(head, title, reason, hook, preview, previewPlay, previewHelp, rangeEditor, titleLabel, editor); candidateList.append(card);
   });
+  visibleCandidateCount += batch.length;
+  candidateCount.textContent = `${visibleCandidateCount}件を表示（全${currentAnalysis.candidates.length}件）`;
+  showMoreBtn.hidden = visibleCandidateCount >= currentAnalysis.candidates.length;
+}
+
+function showCandidates(analysis) {
+  currentAnalysis = analysis;
+  visibleCandidateCount = 0;
+  candidateList.replaceChildren();
+  engineLabel.textContent = analysis.engine === 'openai'
+    ? `OpenAI ${analysis.model} によるAI評価`
+    : 'ローカル評価（OpenAI APIキーを設定するとAI評価に切り替わります）';
+  appendCandidateBatch();
   candidateSection.hidden = false;
 }
 
@@ -568,6 +617,12 @@ titleMarginTop.addEventListener('input', () => { titleMarginTopValue.textContent
 footerSize.addEventListener('input', () => { footerSizeValue.textContent = footerSize.value; });
 footerMarginBottom.addEventListener('input', () => { footerMarginBottomValue.textContent = footerMarginBottom.value; });
 endingSize.addEventListener('input', () => { endingSizeValue.textContent = endingSize.value; });
+document.querySelectorAll('input[name="analysisScope"]').forEach(input => {
+  input.addEventListener('change', () => {
+    analysisRangeFields.hidden = document.querySelector('input[name="analysisScope"]:checked').value !== 'range';
+  });
+});
+showMoreBtn.addEventListener('click', appendCandidateBatch);
 
 function restoreJob(job) {
   currentJobId = job.job_id;
@@ -577,6 +632,7 @@ function restoreJob(job) {
     showTranscript(job.transcript);
     transcribeBtn.hidden = false;
     analyzeBtn.hidden = false;
+    analysisControls.hidden = false;
   }
   if (job.analysis) showCandidates(job.analysis);
   if (job.outputs) showOutputs(job.outputs, job.youtube_uploads || {});
@@ -608,6 +664,7 @@ async function pollJob() {
       status.textContent = `✓ 文字起こし完了 / ${job.transcript.segments.length} セグメント`;
       showTranscript(job.transcript);
       analyzeBtn.hidden = false;
+      analysisControls.hidden = false;
     } else if (job.status === 'candidates_analyzed') {
       clearInterval(pollTimer); pollTimer = null;
       analyzeBtn.disabled = false;
@@ -670,7 +727,7 @@ btn.addEventListener('click', async () => {
     status.className = 'ok';
     status.textContent = `✓ 読み込み完了 / Job ID: ${json.job_id}`;
     transcribeBtn.hidden = false; progress.hidden = true;
-    analyzeBtn.hidden = true; candidateSection.hidden = true;
+    analyzeBtn.hidden = true; analysisControls.hidden = true; candidateSection.hidden = true;
     result.textContent = JSON.stringify(json, null, 2); result.hidden = false;
   } catch (error) { status.textContent = `⚠ ${error.message}`; status.className = 'ng'; }
 });
@@ -679,7 +736,7 @@ youtubeBtn.addEventListener('click', async () => {
   const url = youtubeUrl.value.trim();
   if (!url) { status.textContent = 'YouTubeのURLを入力してください。'; return; }
   youtubeBtn.disabled = true; progress.hidden = false; progressBar.style.width = '0%';
-  candidateSection.hidden = true; transcribeBtn.hidden = true; analyzeBtn.hidden = true;
+  candidateSection.hidden = true; transcribeBtn.hidden = true; analyzeBtn.hidden = true; analysisControls.hidden = true;
   status.className = ''; status.textContent = 'YouTube動画の読み込みを開始しています…';
   try {
     const res = await fetch('/api/youtube', {
@@ -696,6 +753,7 @@ youtubeBtn.addEventListener('click', async () => {
 
 transcribeBtn.addEventListener('click', async () => {
   transcribeBtn.disabled = true; progress.hidden = false;
+  analysisControls.hidden = true; analyzeBtn.hidden = true;
   progressBar.style.width = '0%'; status.className = '';
   try {
     const res = await fetch(`/api/jobs/${currentJobId}/transcribe`, { method: 'POST' });
@@ -713,7 +771,23 @@ analyzeBtn.addEventListener('click', async () => {
   analyzeBtn.disabled = true; candidateSection.hidden = true; progress.hidden = false;
   progressBar.style.width = '0%'; status.className = '';
   try {
-    const res = await fetch(`/api/jobs/${currentJobId}/analyze-candidates`, { method: 'POST' });
+    const scope = document.querySelector('input[name="analysisScope"]:checked').value;
+    const payload = {};
+    if (scope === 'range') {
+      const rangeStart = Number(analysisStart.value);
+      const rangeEnd = Number(analysisEnd.value);
+      if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd <= rangeStart) {
+        throw new Error('解析範囲の開始・終了を正しく入力してください');
+      }
+      if (rangeEnd - rangeStart < 10) throw new Error('解析範囲は10秒以上にしてください');
+      payload.range_start = rangeStart;
+      payload.range_end = rangeEnd;
+    }
+    const res = await fetch(`/api/jobs/${currentJobId}/analyze-candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
     const json = await res.json();
     if (!res.ok) throw new Error(json.detail || '候補解析を開始できませんでした');
     status.textContent = json.progress.message;

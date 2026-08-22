@@ -29,19 +29,41 @@ class CandidateAnalysisTest(unittest.TestCase):
     def test_local_analysis_returns_ranked_non_overlapping_candidates(self) -> None:
         candidates = analyze_locally(sample_transcript()["segments"])
         self.assertGreaterEqual(len(candidates), 2)
-        self.assertLessEqual(len(candidates), 8)
         self.assertGreaterEqual(candidates[0]["score"], candidates[-1]["score"])
         for candidate in candidates:
             self.assertIn("summary", candidate)
             self.assertIn("reason", candidate)
             self.assertIn("hook", candidate)
             self.assertGreater(candidate["end"], candidate["start"])
+            self.assertGreaterEqual(candidate["duration"], 10)
+            self.assertLessEqual(candidate["duration"], 90)
+
+    def test_local_analysis_has_no_fixed_ten_candidate_limit(self) -> None:
+        segments = [
+            {
+                "start": index * 4.0,
+                "end": index * 4.0 + 4.0,
+                "text": f"実は比較して驚いたポイント{index}です。",
+            }
+            for index in range(240)
+        ]
+        self.assertGreater(len(analyze_locally(segments)), 10)
 
     def test_analysis_uses_local_engine_without_api_key(self) -> None:
         with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
             result = analyze_transcript(sample_transcript(), lambda *_: None)
         self.assertEqual(result["engine"], "local")
         self.assertTrue(result["candidates"])
+
+    def test_analysis_can_be_limited_to_a_requested_range(self) -> None:
+        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}):
+            result = analyze_transcript(
+                sample_transcript(), lambda *_: None, range_start=20, range_end=68
+            )
+        self.assertEqual(result["analysis_range"], {"start": 20.0, "end": 68.0})
+        self.assertTrue(result["candidates"])
+        self.assertTrue(all(item["start"] >= 20 for item in result["candidates"]))
+        self.assertTrue(all(item["end"] <= 68 for item in result["candidates"]))
 
     def test_worker_saves_candidate_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -87,7 +109,64 @@ class CandidateAnalysisTest(unittest.TestCase):
                 )
             self.assertEqual(response.status_code, 202)
             self.assertEqual(response.json()["status"], "queued_for_analysis")
-            submit.assert_called_once_with(main.run_candidate_analysis, job_id)
+            submit.assert_called_once_with(main.run_candidate_analysis, job_id, None, None)
+
+    def test_endpoint_queues_requested_analysis_range(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            jobs = Path(temp)
+            job_id = "abc456abc456"
+            (jobs / f"{job_id}.json").write_text(
+                json.dumps({
+                    "job_id": job_id,
+                    "status": "transcribed",
+                    "transcript": sample_transcript(),
+                }),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(main, "JOBS_DIR", jobs),
+                patch.object(main.executor, "submit") as submit,
+            ):
+                response = TestClient(main.app).post(
+                    f"/api/jobs/{job_id}/analyze-candidates",
+                    json={"range_start": 20, "range_end": 68},
+                )
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(
+                response.json()["analysis_request"],
+                {"range_start": 20.0, "range_end": 68.0},
+            )
+            submit.assert_called_once_with(main.run_candidate_analysis, job_id, 20.0, 68.0)
+
+    def test_endpoint_rejects_analysis_range_shorter_than_ten_seconds(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            jobs = Path(temp)
+            job_id = "bad456bad456"
+            (jobs / f"{job_id}.json").write_text(
+                json.dumps({
+                    "job_id": job_id,
+                    "status": "transcribed",
+                    "transcript": sample_transcript(),
+                }),
+                encoding="utf-8",
+            )
+            with patch.object(main, "JOBS_DIR", jobs):
+                response = TestClient(main.app).post(
+                    f"/api/jobs/{job_id}/analyze-candidates",
+                    json={"range_start": 20, "range_end": 25},
+                )
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("10秒以上", response.json()["detail"])
+
+    def test_ui_contains_analysis_scope_and_incremental_candidate_controls(self) -> None:
+        response = TestClient(main.app).get("/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('value="full"', response.text)
+        self.assertIn('value="range"', response.text)
+        self.assertIn('id="analysisStart"', response.text)
+        self.assertIn('id="analysisEnd"', response.text)
+        self.assertIn('id="showMoreBtn"', response.text)
+        self.assertIn("slice(startIndex, startIndex + 30)", response.text)
 
 
 if __name__ == "__main__":
